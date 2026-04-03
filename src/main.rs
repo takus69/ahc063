@@ -46,6 +46,12 @@ struct BfsResult {
     parent_move: Vec<Vec<Option<char>>>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FoodTarget {
+    cell: (usize, usize),
+    dist: usize,
+}
+
 impl Solver {
     fn new(seed: u64, start: Instant, input: Input) -> Self {
         let rng = StdRng::seed_from_u64(seed);
@@ -59,16 +65,24 @@ impl Solver {
     }
 
     fn solve(&mut self) {
-        let path = self.build_zigzag_path();
-        let start_index = path
-            .iter()
-            .position(|&cell| cell == (4, 0))
-            .expect("initial head must be on the path");
+        self.ops.clear();
+        let mut state = self.initial_state();
 
-        self.ops = path[start_index..]
-            .windows(2)
-            .map(|cells| Self::step(cells[0], cells[1]))
-            .collect();
+        while state.colors.len() < self.input.m {
+            let target_color = self.input.d[state.colors.len()];
+            let bfs = self.bfs_reachable_cells(&state);
+            let Some(target) = self.choose_nearest_food_of_color(&state, &bfs, target_color) else {
+                break;
+            };
+            let Some(moves) = bfs.restore_moves(target.cell) else {
+                break;
+            };
+
+            for &op in &moves {
+                self.apply_move(&mut state, op);
+            }
+            self.ops.extend(moves);
+        }
     }
 
     fn ans(&self) {
@@ -111,6 +125,14 @@ impl Solver {
         path
     }
 
+    fn initial_state(&self) -> SnakeState {
+        SnakeState {
+            board: self.input.f.clone(),
+            positions: vec![(4, 0), (3, 0), (2, 0), (1, 0), (0, 0)],
+            colors: vec![1; 5],
+        }
+    }
+
     fn step(from: (usize, usize), to: (usize, usize)) -> char {
         match (
             to.0 as isize - from.0 as isize,
@@ -125,11 +147,7 @@ impl Solver {
     }
 
     fn simulate(&self) -> SnakeState {
-        let mut state = SnakeState {
-            board: self.input.f.clone(),
-            positions: vec![(4, 0), (3, 0), (2, 0), (1, 0), (0, 0)],
-            colors: vec![1; 5],
-        };
+        let mut state = self.initial_state();
 
         for &op in &self.ops {
             self.apply_move(&mut state, op);
@@ -174,6 +192,35 @@ impl Solver {
         }
 
         result
+    }
+
+    fn choose_nearest_food_of_color(
+        &self,
+        state: &SnakeState,
+        bfs: &BfsResult,
+        target_color: usize,
+    ) -> Option<FoodTarget> {
+        let mut best = None;
+
+        for i in 0..self.input.n {
+            for j in 0..self.input.n {
+                if state.board[i][j] != target_color {
+                    continue;
+                }
+                let Some(dist) = bfs.distance((i, j)) else {
+                    continue;
+                };
+                let candidate = FoodTarget { cell: (i, j), dist };
+                if best.is_none_or(|current: FoodTarget| {
+                    candidate.dist < current.dist
+                        || (candidate.dist == current.dist && candidate.cell < current.cell)
+                }) {
+                    best = Some(candidate);
+                }
+            }
+        }
+
+        best
     }
 
     fn apply_move(&self, state: &mut SnakeState, op: char) {

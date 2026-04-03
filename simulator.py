@@ -46,7 +46,7 @@ def run_simulate(trial=200):
     # '''
     df = pd.DataFrame(result, columns=['i', 'score', 'time'])
     score = np.mean(df['score'])
-    sum_score = score * 100
+    sum_score = score * 50
     print(f"score: {format(int(sum_score), ',')}, score mean: {format(int(score), ',')}")
     df.to_csv('result.csv', index=False)
     end_wall = datetime.datetime.now()

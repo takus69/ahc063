@@ -1,0 +1,11 @@
+[package]
+name = "ahc063"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+proconio = "0.4.5"
+rand = "0.8"
+ac-library-rs = "=0.1.1"
+itertools = "0.13.0"
+sha2 = "0.10"

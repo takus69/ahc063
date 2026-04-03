@@ -1,0 +1,10 @@
+/target
+/tools
+/in
+/out*
+*.csv
+*.html
+*.xlsx
+*.exe
+.ipynb_checkpoints
+__pycache__/

@@ -2,13 +2,6 @@
 
 ## command
 
-- tester実行
-
-```
-cargo build --release
-cat .\in\0000.txt | .\tester .\target\release\ahc063.exe > .\out\0000.txt
-```
-
 - 1テストケース実行
 
 ```

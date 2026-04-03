@@ -95,7 +95,16 @@ docs/hypotheses.md の初期案を作成してください。
 
 ---
 
-# 5 改善案生成プロンプト
+# 5 strategy.md 生成プロンプト
+
+```
+problem.md, hypotheses.md を基に
+docs/strategy.md の初期案を作成してください。
+```
+
+---
+
+# 6 改善案生成プロンプト
 
 ```
 AGENTS.md に従って作業してください。
@@ -123,7 +132,7 @@ TODO候補として提示してください。
 
 ---
 
-# 6 Implementer用 実装プロンプト
+# 7 Implementer用 実装プロンプト
 
 ```
 AGENTS.md に従って作業してください。
@@ -154,7 +163,7 @@ todo.md の未完了の先頭タスクを実装してください。
 
 ---
 
-# 7 Reviewer用 レビュープロンプト
+# 8 Reviewer用 レビュープロンプト
 
 ```
 AGENTS.md に従って作業してください。

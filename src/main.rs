@@ -30,6 +30,12 @@ struct Solver {
     ops: Vec<char>,
 }
 
+struct SnakeState {
+    board: Vec<Vec<usize>>,
+    positions: Vec<(usize, usize)>,
+    colors: Vec<usize>,
+}
+
 impl Solver {
     fn new(seed: u64, start: Instant, input: Input) -> Self {
         let rng = StdRng::seed_from_u64(seed);
@@ -62,39 +68,9 @@ impl Solver {
     }
 
     fn score(&self) -> usize {
-        let mut board = self.input.f.clone();
-        let mut positions = vec![(4, 0), (3, 0), (2, 0), (1, 0), (0, 0)];
-        let mut colors = vec![1; 5];
-
-        for &op in &self.ops {
-            let next_head = self.advance(positions[0], op);
-            let previous_tail = *positions.last().expect("snake must be non-empty");
-
-            positions.insert(0, next_head);
-            positions.pop();
-
-            let food = board[next_head.0][next_head.1];
-            if food != 0 {
-                board[next_head.0][next_head.1] = 0;
-                positions.push(previous_tail);
-                colors.push(food);
-                continue;
-            }
-
-            if let Some(h) = (1..positions.len().saturating_sub(1))
-                .find(|&idx| positions[idx] == next_head)
-            {
-                for idx in (h + 1)..positions.len() {
-                    let (i, j) = positions[idx];
-                    board[i][j] = colors[idx];
-                }
-                positions.truncate(h + 1);
-                colors.truncate(h + 1);
-            }
-        }
-
-        let k = colors.len();
-        let e = colors
+        let state = self.simulate();
+        let k = state.colors.len();
+        let e = state.colors
             .iter()
             .zip(self.input.d.iter())
             .filter(|(actual, desired)| actual != desired)
@@ -135,6 +111,47 @@ impl Solver {
             (0, -1) => 'L',
             (0, 1) => 'R',
             _ => panic!("path must move to an adjacent cell"),
+        }
+    }
+
+    fn simulate(&self) -> SnakeState {
+        let mut state = SnakeState {
+            board: self.input.f.clone(),
+            positions: vec![(4, 0), (3, 0), (2, 0), (1, 0), (0, 0)],
+            colors: vec![1; 5],
+        };
+
+        for &op in &self.ops {
+            self.apply_move(&mut state, op);
+        }
+
+        state
+    }
+
+    fn apply_move(&self, state: &mut SnakeState, op: char) {
+        let next_head = self.advance(state.positions[0], op);
+        let previous_tail = *state.positions.last().expect("snake must be non-empty");
+
+        state.positions.insert(0, next_head);
+        state.positions.pop();
+
+        let food = state.board[next_head.0][next_head.1];
+        if food != 0 {
+            state.board[next_head.0][next_head.1] = 0;
+            state.positions.push(previous_tail);
+            state.colors.push(food);
+            return;
+        }
+
+        if let Some(h) = (1..state.positions.len().saturating_sub(1))
+            .find(|&idx| state.positions[idx] == next_head)
+        {
+            for idx in (h + 1)..state.positions.len() {
+                let (i, j) = state.positions[idx];
+                state.board[i][j] = state.colors[idx];
+            }
+            state.positions.truncate(h + 1);
+            state.colors.truncate(h + 1);
         }
     }
 

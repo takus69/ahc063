@@ -1,5 +1,6 @@
 ﻿use proconio::input;
 use std::time::Instant;
+use std::collections::VecDeque;
 use rand::{rngs::StdRng, SeedableRng};
 
 fn read_input() -> Input {
@@ -34,6 +35,15 @@ struct SnakeState {
     board: Vec<Vec<usize>>,
     positions: Vec<(usize, usize)>,
     colors: Vec<usize>,
+}
+
+#[derive(Clone, Debug)]
+struct BfsResult {
+    start: (usize, usize),
+    reachable: Vec<Vec<bool>>,
+    dist: Vec<Vec<Option<usize>>>,
+    parent: Vec<Vec<Option<(usize, usize)>>>,
+    parent_move: Vec<Vec<Option<char>>>,
 }
 
 impl Solver {
@@ -128,6 +138,44 @@ impl Solver {
         state
     }
 
+    fn bfs_reachable_cells(&self, state: &SnakeState) -> BfsResult {
+        let start = state.positions[0];
+        let mut result = BfsResult::new(self.input.n, start);
+        let mut blocked = vec![vec![false; self.input.n]; self.input.n];
+        let mut queue = VecDeque::new();
+
+        // 噛み切りなしの初期版では、現在の頭以外の蛇マスを障害物とみなす。
+        for &(i, j) in state.positions.iter().skip(1) {
+            blocked[i][j] = true;
+        }
+
+        result.reachable[start.0][start.1] = true;
+        result.dist[start.0][start.1] = Some(0);
+        queue.push_back(start);
+
+        while let Some(current) = queue.pop_front() {
+            let current_dist =
+                result.dist[current.0][current.1].expect("visited cell must have distance");
+
+            for op in ['U', 'D', 'L', 'R'] {
+                let Some(next) = self.try_advance(current, op) else {
+                    continue;
+                };
+                if blocked[next.0][next.1] || result.reachable[next.0][next.1] {
+                    continue;
+                }
+
+                result.reachable[next.0][next.1] = true;
+                result.dist[next.0][next.1] = Some(current_dist + 1);
+                result.parent[next.0][next.1] = Some(current);
+                result.parent_move[next.0][next.1] = Some(op);
+                queue.push_back(next);
+            }
+        }
+
+        result
+    }
+
     fn apply_move(&self, state: &mut SnakeState, op: char) {
         let next_head = self.advance(state.positions[0], op);
         let previous_tail = *state.positions.last().expect("snake must be non-empty");
@@ -156,6 +204,10 @@ impl Solver {
     }
 
     fn advance(&self, from: (usize, usize), op: char) -> (usize, usize) {
+        self.try_advance(from, op).expect("move must stay on board")
+    }
+
+    fn try_advance(&self, from: (usize, usize), op: char) -> Option<(usize, usize)> {
         let (di, dj) = match op {
             'U' => (-1, 0),
             'D' => (1, 0),
@@ -163,10 +215,51 @@ impl Solver {
             'R' => (0, 1),
             _ => panic!("unknown operation"),
         };
-        let ni = from.0.checked_add_signed(di).expect("move must stay on board");
-        let nj = from.1.checked_add_signed(dj).expect("move must stay on board");
-        assert!(ni < self.input.n && nj < self.input.n, "move must stay on board");
-        (ni, nj)
+        let ni = from.0.checked_add_signed(di)?;
+        let nj = from.1.checked_add_signed(dj)?;
+        if ni >= self.input.n || nj >= self.input.n {
+            return None;
+        }
+        Some((ni, nj))
+    }
+}
+
+impl BfsResult {
+    fn new(n: usize, start: (usize, usize)) -> Self {
+        Self {
+            start,
+            reachable: vec![vec![false; n]; n],
+            dist: vec![vec![None; n]; n],
+            parent: vec![vec![None; n]; n],
+            parent_move: vec![vec![None; n]; n],
+        }
+    }
+
+    fn can_reach(&self, cell: (usize, usize)) -> bool {
+        self.reachable[cell.0][cell.1]
+    }
+
+    fn distance(&self, cell: (usize, usize)) -> Option<usize> {
+        self.dist[cell.0][cell.1]
+    }
+
+    fn parent_of(&self, cell: (usize, usize)) -> Option<(usize, usize)> {
+        self.parent[cell.0][cell.1]
+    }
+
+    fn restore_moves(&self, goal: (usize, usize)) -> Option<Vec<char>> {
+        if !self.can_reach(goal) {
+            return None;
+        }
+
+        let mut moves = Vec::new();
+        let mut current = goal;
+        while current != self.start {
+            moves.push(self.parent_move[current.0][current.1]?);
+            current = self.parent[current.0][current.1]?;
+        }
+        moves.reverse();
+        Some(moves)
     }
 }
 

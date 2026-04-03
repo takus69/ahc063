@@ -70,13 +70,28 @@ impl Solver {
 
         while state.colors.len() < self.input.m {
             let target_color = self.input.d[state.colors.len()];
-            let bfs = self.bfs_reachable_cells(&state);
-            let Some(target) = self.choose_nearest_food_of_color(&state, &bfs, target_color) else {
-                break;
+            let target_bfs = self.bfs_reachable_target_color(&state, target_color);
+            let target = self.choose_nearest_food_of_color(&state, &target_bfs, target_color);
+
+            let (moves, _target) = if let Some(target) = target {
+                let Some(moves) = target_bfs.restore_moves(target.cell) else {
+                    break;
+                };
+                (moves, target)
+            } else {
+                let fallback_bfs = self.bfs_reachable_cells(&state);
+                let Some(target) = self.choose_nearest_food(&state, &fallback_bfs) else {
+                    break;
+                };
+                let Some(moves) = fallback_bfs.restore_moves(target.cell) else {
+                    break;
+                };
+                (moves, target)
             };
-            let Some(moves) = bfs.restore_moves(target.cell) else {
+
+            if moves.is_empty() {
                 break;
-            };
+            }
 
             for &op in &moves {
                 self.apply_move(&mut state, op);
@@ -194,6 +209,56 @@ impl Solver {
         result
     }
 
+    fn bfs_reachable_target_color(&self, state: &SnakeState, target_color: usize) -> BfsResult {
+        let start = state.positions[0];
+        let mut result = BfsResult::new(self.input.n, start);
+        let mut blocked = vec![vec![false; self.input.n]; self.input.n];
+        let mut queue = VecDeque::new();
+
+        for &(i, j) in state.positions.iter().skip(1) {
+            blocked[i][j] = true;
+        }
+        for i in 0..self.input.n {
+            for j in 0..self.input.n {
+                let food = state.board[i][j];
+                if food != 0 && food != target_color {
+                    blocked[i][j] = true;
+                }
+            }
+        }
+
+        result.reachable[start.0][start.1] = true;
+        result.dist[start.0][start.1] = Some(0);
+        queue.push_back(start);
+
+        while let Some(current) = queue.pop_front() {
+            let current_dist =
+                result.dist[current.0][current.1].expect("visited cell must have distance");
+
+            // 同色餌に到達したら、そこで止まる経路だけを候補にしたいので先へは展開しない。
+            if current != start && state.board[current.0][current.1] == target_color {
+                continue;
+            }
+
+            for op in ['U', 'D', 'L', 'R'] {
+                let Some(next) = self.try_advance(current, op) else {
+                    continue;
+                };
+                if blocked[next.0][next.1] || result.reachable[next.0][next.1] {
+                    continue;
+                }
+
+                result.reachable[next.0][next.1] = true;
+                result.dist[next.0][next.1] = Some(current_dist + 1);
+                result.parent[next.0][next.1] = Some(current);
+                result.parent_move[next.0][next.1] = Some(op);
+                queue.push_back(next);
+            }
+        }
+
+        result
+    }
+
     fn choose_nearest_food_of_color(
         &self,
         state: &SnakeState,
@@ -205,6 +270,30 @@ impl Solver {
         for i in 0..self.input.n {
             for j in 0..self.input.n {
                 if state.board[i][j] != target_color {
+                    continue;
+                }
+                let Some(dist) = bfs.distance((i, j)) else {
+                    continue;
+                };
+                let candidate = FoodTarget { cell: (i, j), dist };
+                if best.is_none_or(|current: FoodTarget| {
+                    candidate.dist < current.dist
+                        || (candidate.dist == current.dist && candidate.cell < current.cell)
+                }) {
+                    best = Some(candidate);
+                }
+            }
+        }
+
+        best
+    }
+
+    fn choose_nearest_food(&self, state: &SnakeState, bfs: &BfsResult) -> Option<FoodTarget> {
+        let mut best = None;
+
+        for i in 0..self.input.n {
+            for j in 0..self.input.n {
+                if state.board[i][j] == 0 {
                     continue;
                 }
                 let Some(dist) = bfs.distance((i, j)) else {

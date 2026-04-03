@@ -79,7 +79,7 @@ impl Solver {
                 };
                 (moves, target)
             } else {
-                let fallback_bfs = self.bfs_reachable_cells(&state);
+                let fallback_bfs = self.bfs_reachable_first_food(&state);
                 let Some(target) = self.choose_nearest_food(&state, &fallback_bfs) else {
                     break;
                 };
@@ -189,6 +189,48 @@ impl Solver {
         while let Some(current) = queue.pop_front() {
             let current_dist =
                 result.dist[current.0][current.1].expect("visited cell must have distance");
+
+            for op in ['U', 'D', 'L', 'R'] {
+                let Some(next) = self.try_advance(current, op) else {
+                    continue;
+                };
+                if blocked[next.0][next.1] || result.reachable[next.0][next.1] {
+                    continue;
+                }
+
+                result.reachable[next.0][next.1] = true;
+                result.dist[next.0][next.1] = Some(current_dist + 1);
+                result.parent[next.0][next.1] = Some(current);
+                result.parent_move[next.0][next.1] = Some(op);
+                queue.push_back(next);
+            }
+        }
+
+        result
+    }
+
+    fn bfs_reachable_first_food(&self, state: &SnakeState) -> BfsResult {
+        let start = state.positions[0];
+        let mut result = BfsResult::new(self.input.n, start);
+        let mut blocked = vec![vec![false; self.input.n]; self.input.n];
+        let mut queue = VecDeque::new();
+
+        for &(i, j) in state.positions.iter().skip(1) {
+            blocked[i][j] = true;
+        }
+
+        result.reachable[start.0][start.1] = true;
+        result.dist[start.0][start.1] = Some(0);
+        queue.push_back(start);
+
+        while let Some(current) = queue.pop_front() {
+            let current_dist =
+                result.dist[current.0][current.1].expect("visited cell must have distance");
+
+            // 任意餌 fallback でも、最初に到達した餌で一度止まって再計画する。
+            if current != start && state.board[current.0][current.1] != 0 {
+                continue;
+            }
 
             for op in ['U', 'D', 'L', 'R'] {
                 let Some(next) = self.try_advance(current, op) else {

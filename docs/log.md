@@ -370,3 +370,16 @@
 考察:
 - 次の TODO では、保持済みの best snapshot と本線結果を比較して、良い方の `ops` を採用すればよい
 - `0003` のような中途半端ケースでも、escape bite 時点から safe branch の保険解を作れる土台ができた
+変更: 最終出力で本線結果と safe branch 結果の良い方を採用するようにした。`solve()` の最後で `best_snapshot` を見て、保持済みの最良 `ops` を `self.ops` に反映する。
+実行:
+- `cargo check`
+- `Get-Content in/0000.txt | cargo run --quiet > out/0000.main.txt`
+- `Get-Content in/0003.txt | cargo run --quiet > out/0003.main.txt`
+結果:
+- コンパイル成功
+- `0000` の score JSON は `276` で据え置き
+- `0003` の score JSON は `1994413 -> 513364` に改善
+- safe branch の保険解が本線より良いケースでは、そのまま最終出力に採用されるようになった
+考察:
+- `0003` のように本線が中途半端に止まるケースで、safe branch 採用が効くことを確認できた
+- 以降は safe branch の起動条件や SafeCollect 自体を改善すると、そのまま最終解の改善につながる

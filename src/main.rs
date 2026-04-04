@@ -141,6 +141,9 @@ impl Solver {
 
         let final_ops = self.ops.clone();
         self.update_best_snapshot(&final_ops);
+        if let Some(best) = &self.best_snapshot {
+            self.ops = best.ops.clone();
+        }
     }
 
     fn ans(&self) {

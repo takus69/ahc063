@@ -32,6 +32,7 @@ struct Solver {
     input: Input,
     ops: Vec<char>,
     last_progress: Option<ProgressSnapshot>,
+    safe_collect_active: bool,
 }
 
 struct SnakeState {
@@ -88,6 +89,7 @@ impl Solver {
             input,
             ops: Vec::new(),
             last_progress: None,
+            safe_collect_active: false,
         }
     }
 
@@ -95,6 +97,7 @@ impl Solver {
         self.ops.clear();
         let mut state = self.initial_state();
         self.last_progress = None;
+        self.safe_collect_active = false;
 
         while !self.should_stop(&state) {
             let phase = self.choose_phase(&state);
@@ -191,31 +194,28 @@ impl Solver {
         state.colors.len() >= self.input.m || self.remaining_food_count(state) == 0
     }
 
-    fn choose_phase(&self, state: &SnakeState) -> Phase {
+    fn choose_phase(&mut self, state: &SnakeState) -> Phase {
         if state.colors.len() >= self.input.m {
             return Phase::BiteRebuild;
         }
-
-        let target_color = self.input.d[state.colors.len()];
-        let target_bfs = self.bfs_reachable_target_color(state, target_color);
-        if self
-            .choose_nearest_food_of_color(state, &target_bfs, target_color)
-            .is_some()
-        {
-            Phase::GreedyTarget
-        } else if self.is_progress_stalled() {
-            Phase::SafeCollect
-        } else if let Some(progress) = self.last_progress {
-            if progress.can_reach_any_food {
-                Phase::GreedyFallback
-            } else {
-                Phase::SafeCollect
-            }
-        } else if self.can_reach_any_food(state) {
-            Phase::GreedyFallback
-        } else {
-            Phase::SafeCollect
+        if self.safe_collect_active {
+            return Phase::SafeCollect;
         }
+        if let Some(progress) = self.last_progress {
+            let _ = progress.can_reach_any_food;
+        }
+
+        if self.plan_greedy_target(state).is_some() {
+            return Phase::GreedyTarget;
+        }
+
+        let fallback = self.plan_greedy_fallback(state);
+        if fallback.is_none() || self.is_progress_stalled() {
+            self.safe_collect_active = true;
+            return Phase::SafeCollect;
+        }
+
+        Phase::GreedyFallback
     }
 
     fn plan_greedy_target(&self, state: &SnakeState) -> Option<Plan> {
@@ -240,9 +240,14 @@ impl Solver {
     }
 
     fn plan_safe_collect(&self, state: &SnakeState) -> Option<Plan> {
-        let mut plan = self.plan_greedy_fallback(state)?;
-        plan.phase = Phase::SafeCollect;
-        Some(plan)
+        let moves = self
+            .plan_safe_collect_bite(state)
+            .or_else(|| self.plan_zigzag_safe_collect_moves(state))
+            .or_else(|| self.plan_greedy_fallback(state).map(|plan| plan.moves))?;
+        Some(Plan {
+            phase: Phase::SafeCollect,
+            moves,
+        })
     }
 
     fn plan_bite_rebuild(&self, state: &SnakeState) -> Option<Plan> {
@@ -254,6 +259,119 @@ impl Solver {
     fn apply_moves(&self, state: &mut SnakeState, moves: &[char]) {
         for &op in moves {
             self.apply_move(state, op);
+        }
+    }
+
+    fn plan_safe_collect_bite(&self, state: &SnakeState) -> Option<Vec<char>> {
+        if self.can_reach_any_food(state) {
+            return None;
+        }
+
+        let mut best: Option<(usize, usize, bool, char)> = None;
+        for op in ['U', 'D', 'L', 'R'] {
+            if state.positions.get(1).is_some_and(|&neck| self.try_advance(state.positions[0], op) == Some(neck)) {
+                continue;
+            }
+            let Some(next) = self.try_advance(state.positions[0], op) else {
+                continue;
+            };
+            if !state
+                .positions
+                .iter()
+                .enumerate()
+                .skip(2)
+                .take(state.positions.len().saturating_sub(3))
+                .any(|(_, &cell)| cell == next)
+            {
+                continue;
+            }
+
+            let mut bitten = SnakeState {
+                board: state.board.clone(),
+                positions: state.positions.clone(),
+                colors: state.colors.clone(),
+            };
+            self.apply_move(&mut bitten, op);
+            if bitten.colors.len() >= state.colors.len() {
+                continue;
+            }
+
+            let candidate = (
+                bitten.colors.len(),
+                self.prefix_len(&bitten),
+                self.can_reach_any_food(&bitten),
+                op,
+            );
+            if best.is_none_or(|current| {
+                candidate.0 > current.0
+                    || (candidate.0 == current.0 && candidate.1 > current.1)
+                    || (candidate.0 == current.0 && candidate.1 == current.1 && candidate.2 && !current.2)
+                    || (candidate.0 == current.0
+                        && candidate.1 == current.1
+                        && candidate.2 == current.2
+                        && candidate.3 < current.3)
+            }) {
+                best = Some(candidate);
+            }
+        }
+
+        best.map(|(_, _, _, op)| vec![op])
+    }
+
+    fn plan_zigzag_safe_collect_moves(&self, state: &SnakeState) -> Option<Vec<char>> {
+        let path = self.build_zigzag_path();
+        let start = state.positions[0];
+        let start_idx = path.iter().position(|&cell| cell == start)?;
+        let mut blocked = vec![vec![false; self.input.n]; self.input.n];
+        for &(i, j) in state.positions.iter().skip(1) {
+            blocked[i][j] = true;
+        }
+
+        let forward = self.collect_along_zigzag_direction(state, &path, &blocked, start_idx, 1);
+        let backward = self.collect_along_zigzag_direction(state, &path, &blocked, start_idx, -1);
+
+        match (forward, backward) {
+            (Some(left), Some(right)) => {
+                if left.len() <= right.len() {
+                    Some(left)
+                } else {
+                    Some(right)
+                }
+            }
+            (Some(moves), None) | (None, Some(moves)) => Some(moves),
+            (None, None) => None,
+        }
+    }
+
+    fn collect_along_zigzag_direction(
+        &self,
+        state: &SnakeState,
+        path: &[(usize, usize)],
+        blocked: &[Vec<bool>],
+        start_idx: usize,
+        delta: isize,
+    ) -> Option<Vec<char>> {
+        let mut current = path[start_idx];
+        let mut idx = start_idx as isize;
+        let mut moves = Vec::new();
+
+        loop {
+            idx += delta;
+            if !(0..path.len() as isize).contains(&idx) {
+                return None;
+            }
+
+            let next = path[idx as usize];
+            if blocked[next.0][next.1] {
+                return None;
+            }
+
+            moves.push(Self::step(current, next));
+            if state.board[next.0][next.1] != 0 {
+                return Some(moves);
+            }
+
+            current = next;
         }
     }
 

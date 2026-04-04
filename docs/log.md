@@ -198,3 +198,29 @@
 考察:
 - stalled 条件が立ったときに SafeCollect へ切り替える入口は追加できた
 - ただし SafeCollect の経路自体はまだ fallback 相当なので、観測上の挙動差分は次の TODO で初めて出る
+
+変更: SafeCollect planner に、現在位置から列ジグザグ経路の前後どちらかへ沿って最初の餌まで進む回収ルートを追加した。ジグザグ進行が現在の胴体で塞がる場合だけ既存 fallback に戻す形にした。
+実験:
+- `cargo check`
+- `Get-Content in/0000.txt | cargo run --quiet > out/0000.main.txt`
+- 手製 stall ケースを PowerShell here-string で `cargo run --quiet`
+結果:
+- コンパイル成功
+- `in/0000.txt` で solver が最後まで実行され、stderr に score JSON `220026` を出力
+- 手製 stall ケースでは出力 `D D D R`、score JSON `40004`
+考察:
+- SafeCollect に「端沿い / ジグザグ系で餌を拾う」最小実装を入れられた
+- 今回は現在の胴体を固定障害物として扱う簡略版なので、ジグザグ経路が塞がる場合は fallback に戻して安全側に倒している
+
+変更: SafeCollect を「まず深い合法 bite を 1 手入れ、無理なら既存ジグザグ回収へ戻る」形に変更した。no-bite で target / fallback が進まないときは SafeCollect を有効化するようにした。
+実験:
+- `cargo check`
+- `Get-Content in/0000.txt | cargo run --quiet > out/0000.main.txt`
+- 手製 safe-collect ケースを PowerShell here-string で `cargo run --quiet`
+結果:
+- コンパイル成功
+- `in/0000.txt` で solver が最後まで実行され、stderr に score JSON `100050` を出力
+- 手製 safe-collect ケースでも最後まで実行され、score JSON `50019` を出力
+考察:
+- no-bite で進めないときに SafeCollect へ移り、bite 候補を返す escape hatch は入れられた
+- bite 候補は「残る長さ最大、同点なら prefix 長、さらに到達可能餌ありを優先」の最小評価で選んでいる

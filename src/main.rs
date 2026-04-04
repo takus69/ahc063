@@ -195,14 +195,6 @@ impl Solver {
         if state.colors.len() >= self.input.m {
             return Phase::BiteRebuild;
         }
-        let _stalled = self.is_progress_stalled();
-        if let Some(progress) = self.last_progress {
-            if !progress.can_reach_any_food {
-                return Phase::SafeCollect;
-            }
-            let _ = progress.prefix_len;
-            let _ = progress.remaining_food_count;
-        }
 
         let target_color = self.input.d[state.colors.len()];
         let target_bfs = self.bfs_reachable_target_color(state, target_color);
@@ -211,6 +203,14 @@ impl Solver {
             .is_some()
         {
             Phase::GreedyTarget
+        } else if self.is_progress_stalled() {
+            Phase::SafeCollect
+        } else if let Some(progress) = self.last_progress {
+            if progress.can_reach_any_food {
+                Phase::GreedyFallback
+            } else {
+                Phase::SafeCollect
+            }
         } else if self.can_reach_any_food(state) {
             Phase::GreedyFallback
         } else {

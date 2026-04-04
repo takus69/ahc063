@@ -186,3 +186,15 @@
 考察:
 - 今回は stalled 判定の追加だけで、phase 切替にはまだ使っていないため既存挙動は維持できている
 - 次の TODO で `is_progress_stalled()` を使えば、GreedyFallback から SafeCollect への切替条件を最小差分で追加できる
+
+変更: stalled 判定が立ったときに `choose_phase()` が `SafeCollect` を返すようにした。SafeCollect planner はまだ fallback 相当の仮実装なので、今回の差分は phase 切替条件の追加に留めた。
+実験:
+- `cargo check`
+- `Get-Content in/0000.txt | cargo run --quiet > out/0000.main.txt`
+結果:
+- コンパイル成功
+- `in/0000.txt` で solver が最後まで実行され、stderr に score JSON `220026` を出力
+- `out/0000.main.txt` の先頭 12 手は `D R D R U R U L U U U U`
+考察:
+- stalled 条件が立ったときに SafeCollect へ切り替える入口は追加できた
+- ただし SafeCollect の経路自体はまだ fallback 相当なので、観測上の挙動差分は次の TODO で初めて出る

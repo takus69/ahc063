@@ -4,6 +4,8 @@ use std::collections::VecDeque;
 use rand::{rngs::StdRng, SeedableRng};
 
 const FALLBACK_STALL_LIMIT: usize = 3;
+const SAFE_COLLECT_TIME_LIMIT_MS: u128 = 1900;
+const SAFE_COLLECT_TURN_LIMIT: usize = 10000;
 
 fn read_input() -> Input {
     input! {
@@ -33,6 +35,7 @@ struct Solver {
     ops: Vec<char>,
     last_progress: Option<ProgressSnapshot>,
     safe_collect_active: bool,
+    force_safe_collect_mode: bool,
 }
 
 struct SnakeState {
@@ -91,6 +94,7 @@ impl Solver {
             ops: Vec::new(),
             last_progress: None,
             safe_collect_active: false,
+            force_safe_collect_mode: false,
         }
     }
 
@@ -99,6 +103,7 @@ impl Solver {
         let mut state = self.initial_state();
         self.last_progress = None;
         self.safe_collect_active = false;
+        self.force_safe_collect_mode = false;
 
         while !self.should_stop(&state) && self.ops.len() < 100000 {
             let phase = self.choose_phase(&state);
@@ -192,14 +197,25 @@ impl Solver {
     }
 
     fn should_stop(&self, state: &SnakeState) -> bool {
+        if self.force_safe_collect_mode && state.colors.len() == self.input.m {
+            return true;
+        }
         state.colors.len() == self.input.m && self.prefix_len(state) == self.input.m
     }
 
     fn choose_phase(&mut self, state: &SnakeState) -> Phase {
+        if self.should_force_safe_collect() {
+            self.force_safe_collect_mode = true;
+            self.safe_collect_active = true;
+        }
+        if self.force_safe_collect_mode {
+            return Phase::SafeCollect;
+        }
         if state.colors.len() == self.input.m && self.prefix_len(state) < self.input.m {
             return Phase::BiteRebuild;
         }
         if self.safe_collect_active {
+            self.safe_collect_active = true;
             return Phase::SafeCollect;
         }
 
@@ -212,7 +228,6 @@ impl Solver {
         }
 
         if !self.can_reach_any_food(state) {
-            self.safe_collect_active = true;
             return Phase::SafeCollect;
         }
         Phase::GreedyFallback
@@ -242,11 +257,19 @@ impl Solver {
     }
 
     fn plan_safe_collect(&self, state: &SnakeState) -> Option<Plan> {
-        let bite_moves = self.plan_safe_collect_bfs_bite(state);
-        let resume_greedy_after_apply = bite_moves.is_some();
-        let moves = bite_moves
-            .or_else(|| self.plan_zigzag_safe_collect_moves(state))
-            .or_else(|| self.plan_greedy_fallback(state).map(|plan| plan.moves))?;
+        let (moves, resume_greedy_after_apply) = if self.force_safe_collect_mode {
+            let moves = self
+                .plan_zigzag_safe_collect_moves(state)
+                .or_else(|| self.plan_forced_safe_collect_bite(state))?;
+            (moves, false)
+        } else {
+            let bite_moves = self.plan_safe_collect_bfs_bite(state);
+            let resume_greedy_after_apply = bite_moves.is_some();
+            let moves = bite_moves
+                .or_else(|| self.plan_zigzag_safe_collect_moves(state))
+                .or_else(|| self.plan_greedy_fallback(state).map(|plan| plan.moves))?;
+            (moves, resume_greedy_after_apply)
+        };
         Some(Plan {
             phase: Phase::SafeCollect,
             moves,
@@ -299,6 +322,10 @@ impl Solver {
             return None;
         }
 
+        self.plan_forced_safe_collect_bite(state)
+    }
+
+    fn plan_forced_safe_collect_bite(&self, state: &SnakeState) -> Option<Vec<char>> {
         for idx in (2..state.positions.len().saturating_sub(1)).rev() {
             if let Some((moves, _)) = self.simulate_bite_candidate(state, idx) {
                 return Some(moves);
@@ -349,6 +376,11 @@ impl Solver {
         }
 
         self.prefix_len(&resumed)
+    }
+
+    fn should_force_safe_collect(&self) -> bool {
+        self.start.elapsed().as_millis() >= SAFE_COLLECT_TIME_LIMIT_MS
+            || self.ops.len() >= SAFE_COLLECT_TURN_LIMIT
     }
 
     fn bfs_reachable_body_target(&self, state: &SnakeState, target: (usize, usize)) -> BfsResult {
@@ -462,7 +494,11 @@ impl Solver {
         phase: Phase,
         resume_greedy_after_apply: bool,
     ) {
-        if phase == Phase::BiteRebuild || resume_greedy_after_apply {
+        if self.force_safe_collect_mode {
+            self.safe_collect_active = state.colors.len() < self.input.m;
+        } else if phase == Phase::BiteRebuild {
+            self.safe_collect_active = false;
+        } else if resume_greedy_after_apply {
             self.safe_collect_active = false;
         }
         let previous = self.last_progress;

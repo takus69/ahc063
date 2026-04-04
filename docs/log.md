@@ -1,4 +1,4 @@
-# log
+﻿# log
 
 ## 2026-04-04
 
@@ -300,3 +300,36 @@
 考察:
 - 脱出用 bite の後に SafeCollect に張り付かず、通常 greedy に戻す土台は入れられた
 - 軽い確認ではスコアが大きく改善しており、方針変更の方向性は良さそう
+
+変更: SafeCollect を保険に下げる条件を追加した。`1.9 sec` 経過、操作数 `10000` 到達、または脱出用 bite を 3 回連続で使った場合だけ SafeCollect を sticky にするようにした。
+実験:
+- `cargo check`
+- `Get-Content in/0000.txt | cargo run --quiet > out/0000.main.txt`
+結果:
+- コンパイル成功
+- `in/0000.txt` で solver が最後まで実行され、stderr に score JSON `276` を出力
+考察:
+- 通常時は「脱出用 bite -> すぐ greedy 復帰」、終盤や連続失敗時だけ SafeCollect へ落とす条件の土台は入れられた
+- 軽い確認ではスコアは据え置きで、少なくとも既存の良いケースは壊していない
+変更: `10000` 手または `1.9 sec` 超えで `force_safe_collect_mode` に入り、以降は `E` を諦めて SafeCollect を純ジグザグ回収モードに固定するよう修正した。強制 SafeCollect 中は `M = k` 到達で停止する。
+実行:
+- `cargo check`
+- `Get-Content in/0000.txt | cargo run --quiet > out/0000.main.txt`
+結果:
+- コンパイル成功
+- `in/0000.txt` で solver は最後まで動き、stderr に score JSON `276` を出力
+- 強制 SafeCollect の発火条件を `10000` 手 / `1.9 sec` のみに絞り、escape bite 回数では発火しないようにした
+考察:
+- 終盤は `BiteRebuild` を諦めて、純ジグザグ回収でまず `M = k` だけを取りに行く挙動になった
+- 閾値を跨ぐ長いケースでの `M = k` 到達率確認は次回の評価タスクで見る
+変更: 強制 SafeCollect 中も、ジグザグが次の餌を拾えない場合は「頭から最も遠い胴体」への deepest bite を再開し、その後またジグザグへ戻るようにした。
+実行:
+- `cargo check`
+- `Get-Content in/0000.txt | cargo run --quiet > out/0000.main.txt`
+結果:
+- コンパイル成功
+- `in/0000.txt` で solver は最後まで動き、stderr に score JSON `276` を出力
+- forced-safe 中の `plan_safe_collect()` は `zigzag -> deepest bite -> zigzag ...` を繰り返せるようになった
+考察:
+- これで「ジグザグ 1 本が詰まったらそのまま停止する」挙動は解消した
+- 実際に最後の餌取り切りが増えるかは、詰まりケースでの追加確認が必要

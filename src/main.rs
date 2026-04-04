@@ -253,7 +253,7 @@ impl Solver {
     }
 
     fn plan_bite_rebuild(&self, state: &SnakeState) -> Option<Plan> {
-        let mut best: Option<(usize, usize, Vec<char>)> = None;
+        let mut best: Option<(usize, usize, usize, Vec<char>)> = None;
 
         for idx in 2..state.positions.len().saturating_sub(1) {
             let Some((moves, bitten)) = self.simulate_bite_candidate(state, idx) else {
@@ -263,19 +263,22 @@ impl Solver {
             if prefix_len != bitten.colors.len() {
                 continue;
             }
-            let candidate = (prefix_len, bitten.colors.len(), moves);
+            let repaired_prefix_len = self.project_prefix_after_resume(&bitten);
+            let candidate = (repaired_prefix_len, prefix_len, bitten.colors.len(), moves);
             if best.as_ref().is_none_or(|current| {
                 candidate.0 > current.0
                     || (candidate.0 == current.0 && candidate.1 > current.1)
+                    || (candidate.0 == current.0 && candidate.1 == current.1 && candidate.2 > current.2)
                     || (candidate.0 == current.0
                         && candidate.1 == current.1
-                        && candidate.2.len() < current.2.len())
+                        && candidate.2 == current.2
+                        && candidate.3.len() < current.3.len())
             }) {
                 best = Some(candidate);
             }
         }
 
-        let (_, _, moves) = best?;
+        let (_, _, _, moves) = best?;
         Some(Plan {
             phase: Phase::BiteRebuild,
             moves,
@@ -320,6 +323,28 @@ impl Solver {
             return None;
         }
         Some((moves, bitten))
+    }
+
+    fn project_prefix_after_resume(&self, state: &SnakeState) -> usize {
+        let mut resumed = SnakeState {
+            board: state.board.clone(),
+            positions: state.positions.clone(),
+            colors: state.colors.clone(),
+        };
+
+        let plan = self
+            .plan_greedy_target(&resumed)
+            .or_else(|| self.plan_greedy_fallback(&resumed))
+            .or_else(|| self.plan_zigzag_safe_collect_moves(&resumed).map(|moves| Plan {
+                phase: Phase::SafeCollect,
+                moves,
+            }));
+
+        if let Some(plan) = plan {
+            self.apply_moves(&mut resumed, &plan.moves);
+        }
+
+        self.prefix_len(&resumed)
     }
 
     fn bfs_reachable_body_target(&self, state: &SnakeState, target: (usize, usize)) -> BfsResult {

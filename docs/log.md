@@ -264,3 +264,16 @@
 考察:
 - `M = k` に達したあとも solver が停止せず、`BiteRebuild` へ入る最小ベースラインは立ち上がった
 - bite 後に「現在の長さ = 正しい prefix 長」となる候補だけに絞っているので、その後は通常 greedy に戻しやすい
+
+変更: `BiteRebuild` で、最長 prefix 固定だけでなく「少し頭側から切って通常 greedy / fallback に戻したときの prefix 伸び」も比較するようにした。bite 候補は 1 回の復帰後 prefix 長を最優先、同点なら bite 直後の prefix 長、その次に長さで比較する。
+実験:
+- `cargo check`
+- `Get-Content in/0000.txt | cargo run --quiet > out/0000.main.txt`
+- 手製 `M = k` ケースを PowerShell here-string で `cargo run --quiet`
+結果:
+- コンパイル成功
+- `in/0000.txt` で solver が最後まで実行され、stderr に score JSON `80258` を出力
+- 手製 `M = k` ケースでは出力 `R U L U R D D`、score JSON `10007`
+考察:
+- bite 候補比較に「少し頭側から切って再修復する案」の評価軸は入れられた
+- 今回の軽い確認では選ばれる候補は従来と同じで、スコア差分は出なかった

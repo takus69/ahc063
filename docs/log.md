@@ -344,3 +344,16 @@
 考察:
 - safe branch を毎ターンではなく、escape bite の節目だけで起動する条件を `solve()` に置けた
 - 次の TODO でこの条件位置に state clone と snapshot 保存をそのまま差し込める
+変更: safe branch 用の `best snapshot` 保持機構を追加した。`OutputSnapshot` に `ops` と `score` を持たせ、任意の操作列を `score` 比較で保持できるようにした。今回は safe branch 本体はまだ無く、本線の最終結果を baseline として snapshot に積むだけに留めた。
+実行:
+- `cargo check`
+- `Get-Content in/0000.txt | cargo run --quiet > out/0000.main.txt`
+- `Get-Content in/0003.txt | cargo run --quiet > out/0003.main.txt`
+結果:
+- コンパイル成功
+- `0000` の score JSON は `276`
+- `0003` の score JSON は `1994413`
+- best snapshot 保持機構の追加による出力挙動の変化はなし
+考察:
+- 次の TODO では、safe branch を実行した結果の `ops` をこの snapshot に流し込めばよい形になった
+- まだ最終出力への採用はしていないため、現時点では purely infrastructure 追加である

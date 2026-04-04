@@ -33,6 +33,7 @@ struct Solver {
     start: Instant,
     input: Input,
     ops: Vec<char>,
+    best_snapshot: Option<OutputSnapshot>,
     last_progress: Option<ProgressSnapshot>,
     safe_collect_active: bool,
     force_safe_collect_mode: bool,
@@ -42,6 +43,12 @@ struct SnakeState {
     board: Vec<Vec<usize>>,
     positions: Vec<(usize, usize)>,
     colors: Vec<usize>,
+}
+
+#[derive(Clone, Debug)]
+struct OutputSnapshot {
+    ops: Vec<char>,
+    score: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -92,6 +99,7 @@ impl Solver {
             start,
             input,
             ops: Vec::new(),
+            best_snapshot: None,
             last_progress: None,
             safe_collect_active: false,
             force_safe_collect_mode: false,
@@ -100,6 +108,7 @@ impl Solver {
 
     fn solve(&mut self) {
         self.ops.clear();
+        self.best_snapshot = None;
         let mut state = self.initial_state();
         self.last_progress = None;
         self.safe_collect_active = false;
@@ -129,6 +138,9 @@ impl Solver {
             self.ops.extend(plan.moves.iter().copied());
             self.update_progress(&state, plan.phase, plan.resume_greedy_after_apply);
         }
+
+        let final_ops = self.ops.clone();
+        self.update_best_snapshot(&final_ops);
     }
 
     fn ans(&self) {
@@ -139,14 +151,7 @@ impl Solver {
 
     fn score(&self) -> usize {
         let state = self.simulate();
-        let k = state.colors.len();
-        let e = state.colors
-            .iter()
-            .zip(self.input.d.iter())
-            .filter(|(actual, desired)| actual != desired)
-            .count();
-
-        self.ops.len() + 10000 * (e + 2 * (self.input.m - k))
+        self.absolute_score(&state, self.ops.len())
     }
 
     fn result(&self) {
@@ -193,11 +198,49 @@ impl Solver {
     }
 
     fn simulate(&self) -> SnakeState {
+        self.simulate_ops(&self.ops)
+    }
+
+    fn simulate_ops(&self, ops: &[char]) -> SnakeState {
         let mut state = self.initial_state();
 
-        self.apply_moves(&mut state, &self.ops);
+        self.apply_moves(&mut state, ops);
 
         state
+    }
+
+    fn score_ops(&self, ops: &[char]) -> usize {
+        let state = self.simulate_ops(ops);
+        self.absolute_score(&state, ops.len())
+    }
+
+    fn absolute_score(&self, state: &SnakeState, turn_count: usize) -> usize {
+        let k = state.colors.len();
+        let e = state
+            .colors
+            .iter()
+            .zip(self.input.d.iter())
+            .filter(|(actual, desired)| actual != desired)
+            .count();
+
+        turn_count + 10000 * (e + 2 * (self.input.m - k))
+    }
+
+    fn update_best_snapshot(&mut self, ops: &[char]) {
+        let candidate = OutputSnapshot {
+            ops: ops.to_vec(),
+            score: self.score_ops(ops),
+        };
+        if self
+            .best_snapshot
+            .as_ref()
+            .is_none_or(|best| {
+                candidate.score < best.score
+                    || (candidate.score == best.score && candidate.ops.len() < best.ops.len())
+            })
+        {
+            self.best_snapshot = Some(candidate);
+        }
     }
 
     fn should_stop(&self, state: &SnakeState) -> bool {

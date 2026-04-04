@@ -357,3 +357,16 @@
 考察:
 - 次の TODO では、safe branch を実行した結果の `ops` をこの snapshot に流し込めばよい形になった
 - まだ最終出力への採用はしていないため、現時点では purely infrastructure 追加である
+変更: safe branch で SafeCollect を最後まで実行する処理を追加した。escape bite の節目で現在状態を clone し、`zigzag -> deepest bite` を繰り返して `M = k` まで進めた branch の `ops` を best snapshot に流し込む。
+実行:
+- `cargo check`
+- `Get-Content in/0000.txt | cargo run --quiet > out/0000.main.txt`
+- `Get-Content in/0003.txt | cargo run --quiet > out/0003.main.txt`
+結果:
+- コンパイル成功
+- `0000` の score JSON は `276`
+- `0003` の score JSON は `1994413`
+- safe branch は内部で実行されるが、最終出力への採用はまだ未実装なので表の出力は据え置き
+考察:
+- 次の TODO では、保持済みの best snapshot と本線結果を比較して、良い方の `ops` を採用すればよい
+- `0003` のような中途半端ケースでも、escape bite 時点から safe branch の保険解を作れる土台ができた

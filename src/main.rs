@@ -131,7 +131,7 @@ impl Solver {
             }
 
             if self.should_launch_safe_branch(&state, &plan) {
-                // safe branch execution will be added in the next TODO.
+                self.run_safe_branch(&state);
             }
 
             self.apply_moves(&mut state, &plan.moves);
@@ -240,6 +240,40 @@ impl Solver {
             })
         {
             self.best_snapshot = Some(candidate);
+        }
+    }
+
+    fn run_safe_branch(&mut self, state: &SnakeState) {
+        let Some(branch_ops) = self.build_safe_branch_ops(state) else {
+            return;
+        };
+        self.update_best_snapshot(&branch_ops);
+    }
+
+    fn build_safe_branch_ops(&self, state: &SnakeState) -> Option<Vec<char>> {
+        let mut branch_state = SnakeState {
+            board: state.board.clone(),
+            positions: state.positions.clone(),
+            colors: state.colors.clone(),
+        };
+        let mut branch_ops = self.ops.clone();
+
+        while branch_state.colors.len() < self.input.m && branch_ops.len() < 100000 {
+            let moves = self
+                .plan_zigzag_safe_collect_moves(&branch_state)
+                .or_else(|| self.plan_forced_safe_collect_bite(&branch_state))?;
+            if moves.is_empty() {
+                return None;
+            }
+
+            self.apply_moves(&mut branch_state, &moves);
+            branch_ops.extend(moves);
+        }
+
+        if branch_state.colors.len() == self.input.m {
+            Some(branch_ops)
+        } else {
+            None
         }
     }
 

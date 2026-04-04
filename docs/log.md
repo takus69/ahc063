@@ -174,3 +174,15 @@
 考察:
 - 既存の greedy / fallback 挙動を保ったまま、phase 選択と plan 適用を分ける最小構造整理は入れられた
 - `prefix_len` / `remaining_food_count` / `can_reach_any_food` を追加したので、次の TODO で進展判定や SafeCollect 切替条件を載せやすくなった
+
+変更: fallback 中に prefix が伸びない状態を数える進展判定を追加した。`fallback_stall_count` と `is_stalled` を progress に保持し、SafeCollect 切替で再利用できる骨組みにした。
+実験:
+- `cargo check`
+- `Get-Content in/0000.txt | cargo run --quiet > out/0000.main.txt`
+結果:
+- コンパイル成功
+- `in/0000.txt` で solver が最後まで実行され、stderr に score JSON `220026` を出力
+- `out/0000.main.txt` の先頭 12 手は `D R D R U R U L U U U U`
+考察:
+- 今回は stalled 判定の追加だけで、phase 切替にはまだ使っていないため既存挙動は維持できている
+- 次の TODO で `is_progress_stalled()` を使えば、GreedyFallback から SafeCollect への切替条件を最小差分で追加できる

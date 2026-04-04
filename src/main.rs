@@ -3,6 +3,8 @@ use std::time::Instant;
 use std::collections::VecDeque;
 use rand::{rngs::StdRng, SeedableRng};
 
+const FALLBACK_STALL_LIMIT: usize = 3;
+
 fn read_input() -> Input {
     input! {
         n: usize,
@@ -72,6 +74,8 @@ struct ProgressSnapshot {
     prefix_len: usize,
     remaining_food_count: usize,
     can_reach_any_food: bool,
+    fallback_stall_count: usize,
+    is_stalled: bool,
 }
 
 impl Solver {
@@ -191,6 +195,7 @@ impl Solver {
         if state.colors.len() >= self.input.m {
             return Phase::BiteRebuild;
         }
+        let _stalled = self.is_progress_stalled();
         if let Some(progress) = self.last_progress {
             if !progress.can_reach_any_food {
                 return Phase::SafeCollect;
@@ -253,10 +258,19 @@ impl Solver {
     }
 
     fn update_progress(&mut self, state: &SnakeState, _phase: Phase) {
+        let previous = self.last_progress;
+        let prefix_len = self.prefix_len(state);
+        let remaining_food_count = self.remaining_food_count(state);
+        let can_reach_any_food = self.can_reach_any_food(state);
+        let fallback_stall_count =
+            self.fallback_stall_count(previous, prefix_len, remaining_food_count, _phase);
+
         self.last_progress = Some(ProgressSnapshot {
-            prefix_len: self.prefix_len(state),
-            remaining_food_count: self.remaining_food_count(state),
-            can_reach_any_food: self.can_reach_any_food(state),
+            prefix_len,
+            remaining_food_count,
+            can_reach_any_food,
+            fallback_stall_count,
+            is_stalled: fallback_stall_count >= FALLBACK_STALL_LIMIT,
         });
     }
 
@@ -278,6 +292,34 @@ impl Solver {
     fn can_reach_any_food(&self, state: &SnakeState) -> bool {
         let bfs = self.bfs_reachable_first_food(state);
         self.choose_nearest_food(state, &bfs).is_some()
+    }
+
+    fn fallback_stall_count(
+        &self,
+        previous: Option<ProgressSnapshot>,
+        prefix_len: usize,
+        remaining_food_count: usize,
+        phase: Phase,
+    ) -> usize {
+        let Some(previous) = previous else {
+            return 0;
+        };
+        if phase != Phase::GreedyFallback {
+            return 0;
+        }
+
+        let prefix_grew = prefix_len > previous.prefix_len;
+        let food_collected = remaining_food_count < previous.remaining_food_count;
+        if food_collected && !prefix_grew {
+            previous.fallback_stall_count + 1
+        } else {
+            0
+        }
+    }
+
+    fn is_progress_stalled(&self) -> bool {
+        self.last_progress
+            .is_some_and(|progress| progress.is_stalled)
     }
 
     fn bfs_reachable_cells(&self, state: &SnakeState) -> BfsResult {

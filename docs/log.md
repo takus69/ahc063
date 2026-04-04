@@ -333,3 +333,14 @@
 考察:
 - これで「ジグザグ 1 本が詰まったらそのまま停止する」挙動は解消した
 - 実際に最後の餌取り切りが増えるかは、詰まりケースでの追加確認が必要
+変更: safe branch の起動条件だけを先に実装した。本線が通常の escape bite を打つ直前、つまり `Phase::SafeCollect` かつ `resume_greedy_after_apply = true` で、まだ `M = k` 前かつ forced-safe ではない場合だけ branch 対象にする。
+実行:
+- `cargo check`
+- `Get-Content in/0000.txt | cargo run --quiet > out/0000.main.txt`
+結果:
+- コンパイル成功
+- `in/0000.txt` で solver は最後まで動き、stderr に score JSON `276` を出力
+- 今回は起動条件の骨組みだけなので、出力挙動は据え置き
+考察:
+- safe branch を毎ターンではなく、escape bite の節目だけで起動する条件を `solve()` に置けた
+- 次の TODO でこの条件位置に state clone と snapshot 保存をそのまま差し込める

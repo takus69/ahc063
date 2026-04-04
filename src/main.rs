@@ -121,6 +121,10 @@ impl Solver {
                 break;
             }
 
+            if self.should_launch_safe_branch(&state, &plan) {
+                // safe branch execution will be added in the next TODO.
+            }
+
             self.apply_moves(&mut state, &plan.moves);
             self.ops.extend(plan.moves.iter().copied());
             self.update_progress(&state, plan.phase, plan.resume_greedy_after_apply);
@@ -381,6 +385,13 @@ impl Solver {
     fn should_force_safe_collect(&self) -> bool {
         self.start.elapsed().as_millis() >= SAFE_COLLECT_TIME_LIMIT_MS
             || self.ops.len() >= SAFE_COLLECT_TURN_LIMIT
+    }
+
+    fn should_launch_safe_branch(&self, state: &SnakeState, plan: &Plan) -> bool {
+        !self.force_safe_collect_mode
+            && state.colors.len() < self.input.m
+            && plan.phase == Phase::SafeCollect
+            && plan.resume_greedy_after_apply
     }
 
     fn bfs_reachable_body_target(&self, state: &SnakeState, target: (usize, usize)) -> BfsResult {

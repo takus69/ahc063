@@ -224,3 +224,29 @@
 考察:
 - no-bite で進めないときに SafeCollect へ移り、bite 候補を返す escape hatch は入れられた
 - bite 候補は「残る長さ最大、同点なら prefix 長、さらに到達可能餌ありを優先」の最小評価で選んでいる
+
+変更: SafeCollect を「no-bite で行ける餌が無くなったら入り、その後は詰むたびに頭から最も遠い胴体へ 1 手 bite してからジグザグ回収する」形に修正した。SafeCollect 中はこの bite とジグザグ回収を繰り返し、全回収まで継続する。
+実験:
+- `cargo check`
+- `Get-Content in/0000.txt | cargo run --quiet > out/0000.main.txt`
+- 手製 safe-collect ケースを PowerShell here-string で `cargo run --quiet`
+結果:
+- コンパイル成功
+- `in/0000.txt` で solver が最後まで実行され、stderr に score JSON `100050` を出力
+- 手製 safe-collect ケースでは出力 `D D D R R`、score JSON `50005`
+考察:
+- SafeCollect の bite 選択は「今すぐ噛める胴体のうち頭から最も遠い位置」を選ぶ単純規則に揃えられた
+- これで no-bite の詰み状態でも、bite -> ジグザグ回収 -> 再び詰んだら bite の繰り返しに入れる
+
+変更: SafeCollect の bite を「隣接 1 手で噛める胴体」ではなく、「空きマスを BFS でたどって到達できる胴体のうち、頭から最も遠い位置」に変更した。bite 後は既存のジグザグ回収へ戻し、また詰んだら同じ BFS bite を繰り返す。
+実験:
+- `cargo check`
+- `Get-Content in/0000.txt | cargo run --quiet > out/0000.main.txt`
+- 手製 safe-collect ケースを PowerShell here-string で `cargo run --quiet`
+結果:
+- コンパイル成功
+- `in/0000.txt` で solver が最後まで実行され、stderr に score JSON `90067` を出力
+- 手製 safe-collect ケースでは出力 `D D D R R`、score JSON `50005`
+考察:
+- SafeCollect の bite が「頭の近くに胴体が無いから噛めない」ケースを避けやすくなった
+- まだ 1 ケースの軽い確認だけなので、`M = k` 到達率の確認は次の TODO でまとめて見る必要がある

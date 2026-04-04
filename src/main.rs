@@ -201,20 +201,22 @@ impl Solver {
         if self.safe_collect_active {
             return Phase::SafeCollect;
         }
-        if let Some(progress) = self.last_progress {
-            let _ = progress.can_reach_any_food;
-        }
 
         if self.plan_greedy_target(state).is_some() {
             return Phase::GreedyTarget;
         }
 
-        let fallback = self.plan_greedy_fallback(state);
-        if fallback.is_none() || self.is_progress_stalled() {
+        if self.plan_greedy_fallback(state).is_some() {
+            return Phase::GreedyFallback;
+        }
+
+        if let Some(progress) = self.last_progress {
+            let _ = progress.can_reach_any_food;
+        }
+        if self.is_progress_stalled() || !self.can_reach_any_food(state) {
             self.safe_collect_active = true;
             return Phase::SafeCollect;
         }
-
         Phase::GreedyFallback
     }
 
@@ -241,7 +243,7 @@ impl Solver {
 
     fn plan_safe_collect(&self, state: &SnakeState) -> Option<Plan> {
         let moves = self
-            .plan_safe_collect_bite(state)
+            .plan_safe_collect_bfs_bite(state)
             .or_else(|| self.plan_zigzag_safe_collect_moves(state))
             .or_else(|| self.plan_greedy_fallback(state).map(|plan| plan.moves))?;
         Some(Plan {
@@ -262,60 +264,77 @@ impl Solver {
         }
     }
 
-    fn plan_safe_collect_bite(&self, state: &SnakeState) -> Option<Vec<char>> {
+    fn plan_safe_collect_bfs_bite(&self, state: &SnakeState) -> Option<Vec<char>> {
         if self.can_reach_any_food(state) {
             return None;
         }
 
-        let mut best: Option<(usize, usize, bool, char)> = None;
-        for op in ['U', 'D', 'L', 'R'] {
-            if state.positions.get(1).is_some_and(|&neck| self.try_advance(state.positions[0], op) == Some(neck)) {
-                continue;
-            }
-            let Some(next) = self.try_advance(state.positions[0], op) else {
+        for idx in (2..state.positions.len().saturating_sub(1)).rev() {
+            let target = state.positions[idx];
+            let bfs = self.bfs_reachable_body_target(state, target);
+            let Some(moves) = bfs.restore_moves(target) else {
                 continue;
             };
-            if !state
-                .positions
-                .iter()
-                .enumerate()
-                .skip(2)
-                .take(state.positions.len().saturating_sub(3))
-                .any(|(_, &cell)| cell == next)
-            {
-                continue;
-            }
-
             let mut bitten = SnakeState {
                 board: state.board.clone(),
                 positions: state.positions.clone(),
                 colors: state.colors.clone(),
             };
-            self.apply_move(&mut bitten, op);
-            if bitten.colors.len() >= state.colors.len() {
-                continue;
-            }
-
-            let candidate = (
-                bitten.colors.len(),
-                self.prefix_len(&bitten),
-                self.can_reach_any_food(&bitten),
-                op,
-            );
-            if best.is_none_or(|current| {
-                candidate.0 > current.0
-                    || (candidate.0 == current.0 && candidate.1 > current.1)
-                    || (candidate.0 == current.0 && candidate.1 == current.1 && candidate.2 && !current.2)
-                    || (candidate.0 == current.0
-                        && candidate.1 == current.1
-                        && candidate.2 == current.2
-                        && candidate.3 < current.3)
-            }) {
-                best = Some(candidate);
+            self.apply_moves(&mut bitten, &moves);
+            if bitten.colors.len() < state.colors.len() {
+                return Some(moves);
             }
         }
 
-        best.map(|(_, _, _, op)| vec![op])
+        None
+    }
+
+    fn bfs_reachable_body_target(&self, state: &SnakeState, target: (usize, usize)) -> BfsResult {
+        let start = state.positions[0];
+        let mut result = BfsResult::new(self.input.n, start);
+        let mut blocked = vec![vec![false; self.input.n]; self.input.n];
+        let mut queue = VecDeque::new();
+
+        for &(i, j) in state.positions.iter().skip(1) {
+            blocked[i][j] = true;
+        }
+        for i in 0..self.input.n {
+            for j in 0..self.input.n {
+                if state.board[i][j] != 0 {
+                    blocked[i][j] = true;
+                }
+            }
+        }
+        blocked[target.0][target.1] = false;
+
+        result.reachable[start.0][start.1] = true;
+        result.dist[start.0][start.1] = Some(0);
+        queue.push_back(start);
+
+        while let Some(current) = queue.pop_front() {
+            let current_dist =
+                result.dist[current.0][current.1].expect("visited cell must have distance");
+
+            for op in ['U', 'D', 'L', 'R'] {
+                let Some(next) = self.try_advance(current, op) else {
+                    continue;
+                };
+                if blocked[next.0][next.1] || result.reachable[next.0][next.1] {
+                    continue;
+                }
+
+                result.reachable[next.0][next.1] = true;
+                result.dist[next.0][next.1] = Some(current_dist + 1);
+                result.parent[next.0][next.1] = Some(current);
+                result.parent_move[next.0][next.1] = Some(op);
+                if next == target {
+                    return result;
+                }
+                queue.push_back(next);
+            }
+        }
+
+        result
     }
 
     fn plan_zigzag_safe_collect_moves(&self, state: &SnakeState) -> Option<Vec<char>> {

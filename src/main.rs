@@ -210,10 +210,7 @@ impl Solver {
             return Phase::GreedyFallback;
         }
 
-        if let Some(progress) = self.last_progress {
-            let _ = progress.can_reach_any_food;
-        }
-        if self.is_progress_stalled() || !self.can_reach_any_food(state) {
+        if !self.can_reach_any_food(state) {
             self.safe_collect_active = true;
             return Phase::SafeCollect;
         }

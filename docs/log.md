@@ -277,3 +277,14 @@
 考察:
 - bite 候補比較に「少し頭側から切って再修復する案」の評価軸は入れられた
 - 今回の軽い確認では選ばれる候補は従来と同じで、スコア差分は出なかった
+
+変更: `choose_phase()` の前半判定を見直し、SafeCollect へ入る条件を「no-bite で target / fallback のどちらも plan できず、到達可能な餌がない場合」に限定した。stalled 条件では SafeCollect に入らないようにした。
+実験:
+- `cargo check`
+- `Get-Content in/0000.txt | cargo run --quiet > out/0000.main.txt`
+結果:
+- コンパイル成功
+- `in/0000.txt` で solver が最後まで実行され、stderr に score JSON `80258` を出力
+考察:
+- SafeCollect を「最後の手」に下げる判定の土台は入れられた
+- 脱出用 bite の後に greedy へ戻す遷移はまだ未実装なので、実際の運用改善は次タスクで確認する

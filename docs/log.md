@@ -250,3 +250,17 @@
 考察:
 - SafeCollect の bite が「頭の近くに胴体が無いから噛めない」ケースを避けやすくなった
 - まだ 1 ケースの軽い確認だけなので、`M = k` 到達率の確認は次の TODO でまとめて見る必要がある
+
+変更: `M = k` 到達後に prefix がまだ短い場合は `BiteRebuild` に入り、最長 prefix を残す bite を選んで通常 greedy に戻るベースラインを追加した。bite 候補は既存の body-target BFS を流用して列挙し、`prefix_len` 最大、同点なら bite 後の長さ最大で選ぶ。
+実験:
+- `cargo check`
+- `Get-Content in/0000.txt | cargo run --quiet > out/0000.main.txt`
+- `M = k` 後の bite を見る手製ケースを PowerShell here-string で `cargo run --quiet`
+結果:
+- コンパイル成功
+- `in/0000.txt` で solver が最後まで実行され、stderr に score JSON `80258` を出力
+- `out/0000.main.txt` の出力ファイル長は `1550` bytes
+- 手製 `M = k` ケースでは出力 `R U L U R D D`、score JSON `10007`
+考察:
+- `M = k` に達したあとも solver が停止せず、`BiteRebuild` へ入る最小ベースラインは立ち上がった
+- bite 後に「現在の長さ = 正しい prefix 長」となる候補だけに絞っているので、その後は通常 greedy に戻しやすい

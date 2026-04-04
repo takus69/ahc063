@@ -99,7 +99,7 @@ impl Solver {
         self.last_progress = None;
         self.safe_collect_active = false;
 
-        while !self.should_stop(&state) {
+        while !self.should_stop(&state) && self.ops.len() < 100000 {
             let phase = self.choose_phase(&state);
             let plan = match phase {
                 Phase::GreedyTarget => self.plan_greedy_target(&state),
@@ -191,11 +191,11 @@ impl Solver {
     }
 
     fn should_stop(&self, state: &SnakeState) -> bool {
-        state.colors.len() >= self.input.m || self.remaining_food_count(state) == 0
+        state.colors.len() == self.input.m && self.prefix_len(state) == self.input.m
     }
 
     fn choose_phase(&mut self, state: &SnakeState) -> Phase {
-        if state.colors.len() >= self.input.m {
+        if state.colors.len() == self.input.m && self.prefix_len(state) < self.input.m {
             return Phase::BiteRebuild;
         }
         if self.safe_collect_active {
@@ -253,9 +253,33 @@ impl Solver {
     }
 
     fn plan_bite_rebuild(&self, state: &SnakeState) -> Option<Plan> {
-        let mut plan = self.plan_greedy_fallback(state)?;
-        plan.phase = Phase::BiteRebuild;
-        Some(plan)
+        let mut best: Option<(usize, usize, Vec<char>)> = None;
+
+        for idx in 2..state.positions.len().saturating_sub(1) {
+            let Some((moves, bitten)) = self.simulate_bite_candidate(state, idx) else {
+                continue;
+            };
+            let prefix_len = self.prefix_len(&bitten);
+            if prefix_len != bitten.colors.len() {
+                continue;
+            }
+            let candidate = (prefix_len, bitten.colors.len(), moves);
+            if best.as_ref().is_none_or(|current| {
+                candidate.0 > current.0
+                    || (candidate.0 == current.0 && candidate.1 > current.1)
+                    || (candidate.0 == current.0
+                        && candidate.1 == current.1
+                        && candidate.2.len() < current.2.len())
+            }) {
+                best = Some(candidate);
+            }
+        }
+
+        let (_, _, moves) = best?;
+        Some(Plan {
+            phase: Phase::BiteRebuild,
+            moves,
+        })
     }
 
     fn apply_moves(&self, state: &mut SnakeState, moves: &[char]) {
@@ -270,23 +294,32 @@ impl Solver {
         }
 
         for idx in (2..state.positions.len().saturating_sub(1)).rev() {
-            let target = state.positions[idx];
-            let bfs = self.bfs_reachable_body_target(state, target);
-            let Some(moves) = bfs.restore_moves(target) else {
-                continue;
-            };
-            let mut bitten = SnakeState {
-                board: state.board.clone(),
-                positions: state.positions.clone(),
-                colors: state.colors.clone(),
-            };
-            self.apply_moves(&mut bitten, &moves);
-            if bitten.colors.len() < state.colors.len() {
+            if let Some((moves, _)) = self.simulate_bite_candidate(state, idx) {
                 return Some(moves);
             }
         }
 
         None
+    }
+
+    fn simulate_bite_candidate(
+        &self,
+        state: &SnakeState,
+        idx: usize,
+    ) -> Option<(Vec<char>, SnakeState)> {
+        let target = *state.positions.get(idx)?;
+        let bfs = self.bfs_reachable_body_target(state, target);
+        let moves = bfs.restore_moves(target)?;
+        let mut bitten = SnakeState {
+            board: state.board.clone(),
+            positions: state.positions.clone(),
+            colors: state.colors.clone(),
+        };
+        self.apply_moves(&mut bitten, &moves);
+        if bitten.colors.len() >= state.colors.len() {
+            return None;
+        }
+        Some((moves, bitten))
     }
 
     fn bfs_reachable_body_target(&self, state: &SnakeState, target: (usize, usize)) -> BfsResult {
@@ -394,13 +427,16 @@ impl Solver {
         }
     }
 
-    fn update_progress(&mut self, state: &SnakeState, _phase: Phase) {
+    fn update_progress(&mut self, state: &SnakeState, phase: Phase) {
+        if phase == Phase::BiteRebuild {
+            self.safe_collect_active = false;
+        }
         let previous = self.last_progress;
         let prefix_len = self.prefix_len(state);
         let remaining_food_count = self.remaining_food_count(state);
         let can_reach_any_food = self.can_reach_any_food(state);
         let fallback_stall_count =
-            self.fallback_stall_count(previous, prefix_len, remaining_food_count, _phase);
+            self.fallback_stall_count(previous, prefix_len, remaining_food_count, phase);
 
         self.last_progress = Some(ProgressSnapshot {
             prefix_len,

@@ -29,6 +29,7 @@ struct Solver {
     start: Instant,
     input: Input,
     ops: Vec<char>,
+    last_progress: Option<ProgressSnapshot>,
 }
 
 struct SnakeState {
@@ -52,6 +53,27 @@ struct FoodTarget {
     dist: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Phase {
+    GreedyTarget,
+    GreedyFallback,
+    SafeCollect,
+    BiteRebuild,
+}
+
+#[derive(Clone, Debug)]
+struct Plan {
+    phase: Phase,
+    moves: Vec<char>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ProgressSnapshot {
+    prefix_len: usize,
+    remaining_food_count: usize,
+    can_reach_any_food: bool,
+}
+
 impl Solver {
     fn new(seed: u64, start: Instant, input: Input) -> Self {
         let rng = StdRng::seed_from_u64(seed);
@@ -61,42 +83,34 @@ impl Solver {
             start,
             input,
             ops: Vec::new(),
+            last_progress: None,
         }
     }
 
     fn solve(&mut self) {
         self.ops.clear();
         let mut state = self.initial_state();
+        self.last_progress = None;
 
-        while state.colors.len() < self.input.m {
-            let target_color = self.input.d[state.colors.len()];
-            let target_bfs = self.bfs_reachable_target_color(&state, target_color);
-            let target = self.choose_nearest_food_of_color(&state, &target_bfs, target_color);
-
-            let (moves, _target) = if let Some(target) = target {
-                let Some(moves) = target_bfs.restore_moves(target.cell) else {
-                    break;
-                };
-                (moves, target)
-            } else {
-                let fallback_bfs = self.bfs_reachable_first_food(&state);
-                let Some(target) = self.choose_nearest_food(&state, &fallback_bfs) else {
-                    break;
-                };
-                let Some(moves) = fallback_bfs.restore_moves(target.cell) else {
-                    break;
-                };
-                (moves, target)
+        while !self.should_stop(&state) {
+            let phase = self.choose_phase(&state);
+            let plan = match phase {
+                Phase::GreedyTarget => self.plan_greedy_target(&state),
+                Phase::GreedyFallback => self.plan_greedy_fallback(&state),
+                Phase::SafeCollect => self.plan_safe_collect(&state),
+                Phase::BiteRebuild => self.plan_bite_rebuild(&state),
+            };
+            let Some(plan) = plan else {
+                break;
             };
 
-            if moves.is_empty() {
+            if plan.moves.is_empty() {
                 break;
             }
 
-            for &op in &moves {
-                self.apply_move(&mut state, op);
-            }
-            self.ops.extend(moves);
+            self.apply_moves(&mut state, &plan.moves);
+            self.ops.extend(plan.moves.iter().copied());
+            self.update_progress(&state, plan.phase);
         }
     }
 
@@ -164,11 +178,106 @@ impl Solver {
     fn simulate(&self) -> SnakeState {
         let mut state = self.initial_state();
 
-        for &op in &self.ops {
-            self.apply_move(&mut state, op);
-        }
+        self.apply_moves(&mut state, &self.ops);
 
         state
+    }
+
+    fn should_stop(&self, state: &SnakeState) -> bool {
+        state.colors.len() >= self.input.m || self.remaining_food_count(state) == 0
+    }
+
+    fn choose_phase(&self, state: &SnakeState) -> Phase {
+        if state.colors.len() >= self.input.m {
+            return Phase::BiteRebuild;
+        }
+        if let Some(progress) = self.last_progress {
+            if !progress.can_reach_any_food {
+                return Phase::SafeCollect;
+            }
+            let _ = progress.prefix_len;
+            let _ = progress.remaining_food_count;
+        }
+
+        let target_color = self.input.d[state.colors.len()];
+        let target_bfs = self.bfs_reachable_target_color(state, target_color);
+        if self
+            .choose_nearest_food_of_color(state, &target_bfs, target_color)
+            .is_some()
+        {
+            Phase::GreedyTarget
+        } else if self.can_reach_any_food(state) {
+            Phase::GreedyFallback
+        } else {
+            Phase::SafeCollect
+        }
+    }
+
+    fn plan_greedy_target(&self, state: &SnakeState) -> Option<Plan> {
+        let target_color = self.input.d[state.colors.len()];
+        let bfs = self.bfs_reachable_target_color(state, target_color);
+        let target = self.choose_nearest_food_of_color(state, &bfs, target_color)?;
+        let moves = bfs.restore_moves(target.cell)?;
+        Some(Plan {
+            phase: Phase::GreedyTarget,
+            moves,
+        })
+    }
+
+    fn plan_greedy_fallback(&self, state: &SnakeState) -> Option<Plan> {
+        let bfs = self.bfs_reachable_first_food(state);
+        let target = self.choose_nearest_food(state, &bfs)?;
+        let moves = bfs.restore_moves(target.cell)?;
+        Some(Plan {
+            phase: Phase::GreedyFallback,
+            moves,
+        })
+    }
+
+    fn plan_safe_collect(&self, state: &SnakeState) -> Option<Plan> {
+        let mut plan = self.plan_greedy_fallback(state)?;
+        plan.phase = Phase::SafeCollect;
+        Some(plan)
+    }
+
+    fn plan_bite_rebuild(&self, state: &SnakeState) -> Option<Plan> {
+        let mut plan = self.plan_greedy_fallback(state)?;
+        plan.phase = Phase::BiteRebuild;
+        Some(plan)
+    }
+
+    fn apply_moves(&self, state: &mut SnakeState, moves: &[char]) {
+        for &op in moves {
+            self.apply_move(state, op);
+        }
+    }
+
+    fn update_progress(&mut self, state: &SnakeState, _phase: Phase) {
+        self.last_progress = Some(ProgressSnapshot {
+            prefix_len: self.prefix_len(state),
+            remaining_food_count: self.remaining_food_count(state),
+            can_reach_any_food: self.can_reach_any_food(state),
+        });
+    }
+
+    fn prefix_len(&self, state: &SnakeState) -> usize {
+        state.colors
+            .iter()
+            .zip(self.input.d.iter())
+            .take_while(|(actual, desired)| actual == desired)
+            .count()
+    }
+
+    fn remaining_food_count(&self, state: &SnakeState) -> usize {
+        state.board
+            .iter()
+            .map(|row| row.iter().filter(|&&food| food != 0).count())
+            .sum()
+    }
+
+    fn can_reach_any_food(&self, state: &SnakeState) -> bool {
+        let bfs = self.bfs_reachable_first_food(state);
+        self.choose_nearest_food(state, &bfs).is_some()
     }
 
     fn bfs_reachable_cells(&self, state: &SnakeState) -> BfsResult {

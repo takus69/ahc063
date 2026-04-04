@@ -162,3 +162,15 @@
 考察:
 - fallback でも「最初に到達した餌で一度止まって再計画する」探索へ統一できた
 - 次は simulator を回して、`M-k` と `E` の悪化要因がどこまで減ったかを確認したい
+変更: `solve()` を phase ベースの骨組みに整理し、`Phase` / `Plan` / progress 小関数を追加した。既存の greedy target と fallback は専用 planner 入口に分離し、SafeCollect / BiteRebuild は暫定で fallback に寄せた。
+実験:
+- `cargo check`
+- `cargo build`
+- `Get-Content in/0000.txt | cargo run --quiet > out/0000.main.txt`
+結果:
+- コンパイル成功
+- `in/0000.txt` で solver が最後まで実行され、stderr に score JSON `220026` を出力
+- 出力手数は `26`、先頭 8 手は `D R D R U R U L`
+考察:
+- 既存の greedy / fallback 挙動を保ったまま、phase 選択と plan 適用を分ける最小構造整理は入れられた
+- `prefix_len` / `remaining_food_count` / `can_reach_any_food` を追加したので、次の TODO で進展判定や SafeCollect 切替条件を載せやすくなった

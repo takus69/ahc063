@@ -288,3 +288,15 @@
 考察:
 - SafeCollect を「最後の手」に下げる判定の土台は入れられた
 - 脱出用 bite の後に greedy へ戻す遷移はまだ未実装なので、実際の運用改善は次タスクで確認する
+
+変更: 脱出用 `SafeCollect` bite の直後だけ `safe_collect_active` を解除し、次の反復で通常の `GreedyTarget / GreedyFallback` 判定へ戻る遷移を追加した。`Plan` に遷移フラグを持たせ、SafeCollect の bite のみ `resume_greedy_after_apply = true` にした。
+実験:
+- `cargo check`
+- `Get-Content in/0000.txt | cargo run --quiet > out/0000.main.txt`
+結果:
+- コンパイル成功
+- `in/0000.txt` で solver が最後まで実行され、stderr に score JSON `276` を出力
+- 出力ファイル長は `1658` bytes、先頭 12 手は `D R D R U R U L U U U U`
+考察:
+- 脱出用 bite の後に SafeCollect に張り付かず、通常 greedy に戻す土台は入れられた
+- 軽い確認ではスコアが大きく改善しており、方針変更の方向性は良さそう

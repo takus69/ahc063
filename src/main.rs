@@ -68,6 +68,7 @@ enum Phase {
 struct Plan {
     phase: Phase,
     moves: Vec<char>,
+    resume_greedy_after_apply: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -117,7 +118,7 @@ impl Solver {
 
             self.apply_moves(&mut state, &plan.moves);
             self.ops.extend(plan.moves.iter().copied());
-            self.update_progress(&state, plan.phase);
+            self.update_progress(&state, plan.phase, plan.resume_greedy_after_apply);
         }
     }
 
@@ -225,6 +226,7 @@ impl Solver {
         Some(Plan {
             phase: Phase::GreedyTarget,
             moves,
+            resume_greedy_after_apply: false,
         })
     }
 
@@ -235,17 +237,20 @@ impl Solver {
         Some(Plan {
             phase: Phase::GreedyFallback,
             moves,
+            resume_greedy_after_apply: false,
         })
     }
 
     fn plan_safe_collect(&self, state: &SnakeState) -> Option<Plan> {
-        let moves = self
-            .plan_safe_collect_bfs_bite(state)
+        let bite_moves = self.plan_safe_collect_bfs_bite(state);
+        let resume_greedy_after_apply = bite_moves.is_some();
+        let moves = bite_moves
             .or_else(|| self.plan_zigzag_safe_collect_moves(state))
             .or_else(|| self.plan_greedy_fallback(state).map(|plan| plan.moves))?;
         Some(Plan {
             phase: Phase::SafeCollect,
             moves,
+            resume_greedy_after_apply,
         })
     }
 
@@ -279,6 +284,7 @@ impl Solver {
         Some(Plan {
             phase: Phase::BiteRebuild,
             moves,
+            resume_greedy_after_apply: false,
         })
     }
 
@@ -335,6 +341,7 @@ impl Solver {
             .or_else(|| self.plan_zigzag_safe_collect_moves(&resumed).map(|moves| Plan {
                 phase: Phase::SafeCollect,
                 moves,
+                resume_greedy_after_apply: false,
             }));
 
         if let Some(plan) = plan {
@@ -449,8 +456,13 @@ impl Solver {
         }
     }
 
-    fn update_progress(&mut self, state: &SnakeState, phase: Phase) {
-        if phase == Phase::BiteRebuild {
+    fn update_progress(
+        &mut self,
+        state: &SnakeState,
+        phase: Phase,
+        resume_greedy_after_apply: bool,
+    ) {
+        if phase == Phase::BiteRebuild || resume_greedy_after_apply {
             self.safe_collect_active = false;
         }
         let previous = self.last_progress;

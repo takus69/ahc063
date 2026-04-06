@@ -2,6 +2,8 @@
 use std::time::Instant;
 use std::collections::VecDeque;
 use rand::{rngs::StdRng, SeedableRng};
+#[cfg(debug_assertions)]
+use std::io::Write;
 
 const FALLBACK_STALL_LIMIT: usize = 3;
 const SAFE_COLLECT_TIME_LIMIT_MS: u128 = 1900;
@@ -74,6 +76,17 @@ enum Phase {
     BiteRebuild,
 }
 
+impl Phase {
+    fn as_str(self) -> &'static str {
+        match self {
+            Phase::GreedyTarget => "GreedyTarget",
+            Phase::GreedyFallback => "GreedyFallback",
+            Phase::SafeCollect => "SafeCollect",
+            Phase::BiteRebuild => "BiteRebuild",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct Plan {
     phase: Phase,
@@ -113,9 +126,11 @@ impl Solver {
         self.last_progress = None;
         self.safe_collect_active = false;
         self.force_safe_collect_mode = false;
+        self.reset_phase_trace();
 
         while !self.should_stop(&state) && self.ops.len() < 100000 {
             let phase = self.choose_phase(&state);
+            self.write_phase_trace(self.ops.len(), phase);
             let plan = match phase {
                 Phase::GreedyTarget => self.plan_greedy_target(&state),
                 Phase::GreedyFallback => self.plan_greedy_fallback(&state),
@@ -291,8 +306,6 @@ impl Solver {
         if self.should_force_safe_collect() {
             self.force_safe_collect_mode = true;
             self.safe_collect_active = true;
-        }
-        if self.force_safe_collect_mode {
             return Phase::SafeCollect;
         }
         if state.colors.len() == self.input.m && self.prefix_len(state) < self.input.m {
@@ -303,11 +316,11 @@ impl Solver {
             return Phase::SafeCollect;
         }
 
-        if self.plan_greedy_target(state).is_some() {
+        if self.plan_greedy_target_inner(state).is_some() {
             return Phase::GreedyTarget;
         }
 
-        if self.plan_greedy_fallback(state).is_some() {
+        if self.plan_greedy_fallback_inner(state).is_some() {
             return Phase::GreedyFallback;
         }
 
@@ -318,26 +331,27 @@ impl Solver {
     }
 
     fn plan_greedy_target(&self, state: &SnakeState) -> Option<Plan> {
-        let target_color = self.input.d[state.colors.len()];
-        let bfs = self.bfs_reachable_target_color(state, target_color);
-        let target = self.choose_nearest_food_of_color(state, &bfs, target_color)?;
-        let moves = bfs.restore_moves(target.cell)?;
-        Some(Plan {
-            phase: Phase::GreedyTarget,
-            moves,
-            resume_greedy_after_apply: false,
-        })
+        let (plan, bfs, target, target_color) = self.plan_greedy_target_inner(state)?;
+        self.write_bfs_snapshot(
+            self.ops.len(),
+            Phase::GreedyTarget,
+            Some(target_color),
+            target.cell,
+            &bfs,
+        );
+        Some(plan)
     }
 
     fn plan_greedy_fallback(&self, state: &SnakeState) -> Option<Plan> {
-        let bfs = self.bfs_reachable_first_food(state);
-        let target = self.choose_nearest_food(state, &bfs)?;
-        let moves = bfs.restore_moves(target.cell)?;
-        Some(Plan {
-            phase: Phase::GreedyFallback,
-            moves,
-            resume_greedy_after_apply: false,
-        })
+        let (plan, bfs, target) = self.plan_greedy_fallback_inner(state)?;
+        self.write_bfs_snapshot(
+            self.ops.len(),
+            Phase::GreedyFallback,
+            None,
+            target.cell,
+            &bfs,
+        );
+        Some(plan)
     }
 
     fn plan_safe_collect(&self, state: &SnakeState) -> Option<Plan> {
@@ -351,7 +365,7 @@ impl Solver {
             let resume_greedy_after_apply = bite_moves.is_some();
             let moves = bite_moves
                 .or_else(|| self.plan_zigzag_safe_collect_moves(state))
-                .or_else(|| self.plan_greedy_fallback(state).map(|plan| plan.moves))?;
+                .or_else(|| self.plan_greedy_fallback_inner(state).map(|(plan, _, _)| plan.moves))?;
             (moves, resume_greedy_after_apply)
         };
         Some(Plan {
@@ -447,8 +461,8 @@ impl Solver {
         };
 
         let plan = self
-            .plan_greedy_target(&resumed)
-            .or_else(|| self.plan_greedy_fallback(&resumed))
+            .plan_greedy_target_inner(&resumed).map(|(plan, _, _, _)| plan)
+            .or_else(|| self.plan_greedy_fallback_inner(&resumed).map(|(plan, _, _)| plan))
             .or_else(|| self.plan_zigzag_safe_collect_moves(&resumed).map(|moves| Plan {
                 phase: Phase::SafeCollect,
                 moves,
@@ -465,6 +479,96 @@ impl Solver {
     fn should_force_safe_collect(&self) -> bool {
         self.start.elapsed().as_millis() >= SAFE_COLLECT_TIME_LIMIT_MS
             || self.ops.len() >= SAFE_COLLECT_TURN_LIMIT
+    }
+
+    fn plan_greedy_target_inner(
+        &self,
+        state: &SnakeState,
+    ) -> Option<(Plan, BfsResult, FoodTarget, usize)> {
+        let target_color = self.input.d[state.colors.len()];
+        let bfs = self.bfs_reachable_target_color(state, target_color);
+        let target = self.choose_nearest_food_of_color(state, &bfs, target_color)?;
+        let moves = bfs.restore_moves(target.cell)?;
+        let plan = Plan {
+            phase: Phase::GreedyTarget,
+            moves,
+            resume_greedy_after_apply: false,
+        };
+        Some((plan, bfs, target, target_color))
+    }
+
+    fn plan_greedy_fallback_inner(
+        &self,
+        state: &SnakeState,
+    ) -> Option<(Plan, BfsResult, FoodTarget)> {
+        let bfs = self.bfs_reachable_first_food(state);
+        let target = self.choose_nearest_food(state, &bfs)?;
+        let moves = bfs.restore_moves(target.cell)?;
+        let plan = Plan {
+            phase: Phase::GreedyFallback,
+            moves,
+            resume_greedy_after_apply: false,
+        };
+        Some((plan, bfs, target))
+    }
+
+    #[cfg(debug_assertions)]
+    fn reset_phase_trace(&self) {
+        let _ = std::fs::File::create("debug.txt");
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn reset_phase_trace(&self) {}
+
+    #[cfg(debug_assertions)]
+    fn write_phase_trace(&self, turn: usize, phase: Phase) {
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("debug.txt")
+        {
+            let _ = writeln!(file, "{} {}", turn, phase.as_str());
+        }
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn write_phase_trace(&self, _turn: usize, _phase: Phase) {}
+
+    #[cfg(debug_assertions)]
+    fn write_bfs_snapshot(
+        &self,
+        turn: usize,
+        phase: Phase,
+        target_color: Option<usize>,
+        target: (usize, usize),
+        bfs: &BfsResult,
+    ) {
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("debug.txt")
+        {
+            let _ = writeln!(file, "TURN {}", turn);
+            let _ = writeln!(file, "PHASE {}", phase.as_str());
+            if let Some(target_color) = target_color {
+                let _ = writeln!(file, "TARGET_COLOR {}", target_color);
+            }
+            let _ = writeln!(file, "TARGET {} {}", target.0, target.1);
+            let _ = writeln!(file, "BFS");
+            let _ = write!(file, "{}", bfs.dist_debug_text());
+            let _ = writeln!(file, "END");
+        }
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn write_bfs_snapshot(
+        &self,
+        _turn: usize,
+        _phase: Phase,
+        _target_color: Option<usize>,
+        _target: (usize, usize),
+        _bfs: &BfsResult,
+    ) {
     }
 
     fn should_launch_safe_branch(&self, state: &SnakeState, plan: &Plan) -> bool {
@@ -739,17 +843,22 @@ impl Solver {
     fn bfs_reachable_target_color(&self, state: &SnakeState, target_color: usize) -> BfsResult {
         let start = state.positions[0];
         let mut result = BfsResult::new(self.input.n, start);
-        let mut blocked = vec![vec![false; self.input.n]; self.input.n];
+        let mut cell_open_turn = vec![vec![0; self.input.n]; self.input.n];  // ブロックが空くターン数。固定障害物は usize::MAX
         let mut queue = VecDeque::new();
 
-        for &(i, j) in state.positions.iter().skip(1) {
-            blocked[i][j] = true;
+        for (l, &(i, j)) in state.positions.iter().enumerate().skip(1) {
+            if l == 1 {
+                // Uターン禁止なので、頭の次のマスは障害物として扱う
+                cell_open_turn[i][j] = usize::MAX;
+            } else {
+                cell_open_turn[i][j] = l;
+            }
         }
         for i in 0..self.input.n {
             for j in 0..self.input.n {
                 let food = state.board[i][j];
                 if food != 0 && food != target_color {
-                    blocked[i][j] = true;
+                    cell_open_turn[i][j] = usize::MAX;
                 }
             }
         }
@@ -771,12 +880,14 @@ impl Solver {
                 let Some(next) = self.try_advance(current, op) else {
                     continue;
                 };
-                if blocked[next.0][next.1] || result.reachable[next.0][next.1] {
+                let arrival_turn = current_dist + 1;
+                let still_occupied = cell_open_turn[next.0][next.1] > arrival_turn;
+                if still_occupied || result.reachable[next.0][next.1] {
                     continue;
                 }
 
                 result.reachable[next.0][next.1] = true;
-                result.dist[next.0][next.1] = Some(current_dist + 1);
+                result.dist[next.0][next.1] = Some(arrival_turn);
                 result.parent[next.0][next.1] = Some(current);
                 result.parent_move[next.0][next.1] = Some(op);
                 queue.push_back(next);
@@ -923,6 +1034,24 @@ impl BfsResult {
         }
         moves.reverse();
         Some(moves)
+    }
+
+    fn dist_debug_text(&self) -> String {
+        let mut lines = Vec::with_capacity(self.dist.len());
+        for row in &self.dist {
+            let line = row
+                .iter()
+                .map(|cell| match cell {
+                    Some(dist) => dist.to_string(),
+                    None => ".".to_owned(),
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            lines.push(line);
+        }
+        let mut text = lines.join("\n");
+        text.push('\n');
+        text
     }
 }
 

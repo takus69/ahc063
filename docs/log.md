@@ -383,3 +383,33 @@
 考察:
 - `0003` のように本線が中途半端に止まるケースで、safe branch 採用が効くことを確認できた
 - 以降は safe branch の起動条件や SafeCollect 自体を改善すると、そのまま最終解の改善につながる
+変更: debug ビルド時のみ `debug.txt` に phase trace を出すようにした。`solve()` 開始時にファイルを初期化し、各再計画タイミングで `turn phase` 形式を追記する。release ビルドでは phase trace 用の処理は no-op にしている。
+実行:
+- `cargo check`
+- `Get-Content in/0000.txt | cargo run --quiet > out/0000.main.txt`
+- `Get-Content debug.txt -Head 8`
+- `cargo build --release`
+- `Get-Content in/0000.txt | .\\target\\release\\ahc063.exe > out/0000.release.txt`
+結果:
+- コンパイル成功
+- debug 実行後の `debug.txt` 先頭は `0 GreedyTarget`, `2 GreedyTarget`, ... の形式で出力
+- debug 実行時の stderr の score JSON は `21607`
+- release 実行では `debug.txt` の更新時刻は変わらず、phase trace は出力されなかった
+考察:
+- stdout は提出形式の操作列のまま、stderr は score JSON のままで壊れていない
+- tools 側が読む `turn phase` 形式の最小トレース基盤は入ったので、次は phase 以外の項目が必要になった時だけ拡張すればよい
+変更: GreedyTarget / GreedyFallback の再計画時に、solver が実際に使った BFS 距離行列を `debug.txt` に block 形式で追記するようにした。`Phase::as_str()` と `BfsResult::dist_debug_text()` を追加し、debug ビルド時のみ `TURN / PHASE / TARGET_COLOR / TARGET / BFS / END` を出力する。
+実行:
+- `cargo check`
+- `Get-Content in/0000.txt | cargo run --quiet > out/0000.main.txt`
+- `Select-String -Path debug.txt -Pattern "^TURN |^PHASE |^TARGET_COLOR |^TARGET |^BFS$|^END$" | Select-Object -First 18`
+- `cargo build --release`
+- `Get-Content in/0000.txt | .\\target\\release\\ahc063.exe > out/0000.release.txt`
+結果:
+- コンパイル成功
+- debug 実行後の `debug.txt` に `TURN 0 / PHASE GreedyTarget / TARGET_COLOR 2 / TARGET 5 1 / BFS / ... / END` の block が追記された
+- debug 実行時の stderr の score JSON は `21607`
+- release 実行では `debug.txt` の更新時刻は変わらず、BFS スナップショットは出力されなかった
+考察:
+- visualizer 側は solver が実際に使った BFS をそのまま表示できるようになり、再計算由来のズレを切り分けやすくなった
+- phase trace の plain line も残しているため、既存の phase 表示を壊さずに block 形式を追加できている

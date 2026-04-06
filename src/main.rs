@@ -846,13 +846,8 @@ impl Solver {
         let mut cell_open_turn = vec![vec![0; self.input.n]; self.input.n];  // ブロックが空くターン数。固定障害物は usize::MAX
         let mut queue = VecDeque::new();
 
-        for (l, &(i, j)) in state.positions.iter().enumerate().skip(1) {
-            if l == 1 {
-                // Uターン禁止なので、頭の次のマスは障害物として扱う
-                cell_open_turn[i][j] = usize::MAX;
-            } else {
-                cell_open_turn[i][j] = l;
-            }
+        for (l, &(i, j)) in state.positions.iter().enumerate().skip(1).rev() {
+            cell_open_turn[i][j] = state.colors.len()-l-1;
         }
         for i in 0..self.input.n {
             for j in 0..self.input.n {

@@ -21,8 +21,7 @@ def main(i):
     # print(i, 'start')
     r = run(i)
     t = round(time.time()-start, 4)
-    score = r['score']
-    data = [i, score, t]
+    data = {'i': i, **r, 'time': t}
     print('\r', 'end', i, end='')
     # print(i, 'end')
     return data
@@ -44,7 +43,30 @@ def run_simulate(trial=200):
         result = [d.get() for d in data]
     print()
     # '''
-    df = pd.DataFrame(result, columns=['i', 'score', 'time'])
+    df = pd.DataFrame(result)
+    columns = [
+        'i',
+        'score',
+        'k',
+        'm',
+        'e',
+        't',
+        'prefix_len',
+        'remaining_food',
+        'completed',
+        'full_length',
+        'escape_bite_count',
+        'rebuild_bite_count',
+        'safe_collect_count',
+        'forced_safe_collect',
+        'used_safe_branch',
+        'elapsed_ms',
+        'time',
+    ]
+    for column in columns:
+        if column not in df.columns:
+            df[column] = np.nan
+    df = df[columns]
     score = np.mean(df['score'])
     sum_score = score * 50
     print(f"score: {format(int(sum_score), ',')}, score mean: {format(int(score), ',')}")

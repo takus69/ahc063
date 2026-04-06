@@ -39,6 +39,10 @@ struct Solver {
     last_progress: Option<ProgressSnapshot>,
     safe_collect_active: bool,
     force_safe_collect_mode: bool,
+    escape_bite_count: usize,
+    rebuild_bite_count: usize,
+    safe_collect_count: usize,
+    previous_phase: Option<Phase>,
 }
 
 struct SnakeState {
@@ -51,6 +55,16 @@ struct SnakeState {
 struct OutputSnapshot {
     ops: Vec<char>,
     score: usize,
+    stats: OutputStats,
+}
+
+#[derive(Clone, Debug, Default)]
+struct OutputStats {
+    escape_bite_count: usize,
+    rebuild_bite_count: usize,
+    safe_collect_count: usize,
+    forced_safe_collect: bool,
+    used_safe_branch: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -116,6 +130,10 @@ impl Solver {
             last_progress: None,
             safe_collect_active: false,
             force_safe_collect_mode: false,
+            escape_bite_count: 0,
+            rebuild_bite_count: 0,
+            safe_collect_count: 0,
+            previous_phase: None,
         }
     }
 
@@ -126,6 +144,10 @@ impl Solver {
         self.last_progress = None;
         self.safe_collect_active = false;
         self.force_safe_collect_mode = false;
+        self.escape_bite_count = 0;
+        self.rebuild_bite_count = 0;
+        self.safe_collect_count = 0;
+        self.previous_phase = None;
         self.reset_phase_trace();
 
         while !self.should_stop(&state) && self.ops.len() < 100000 {
@@ -149,13 +171,26 @@ impl Solver {
                 self.run_safe_branch(&state);
             }
 
+            if plan.phase == Phase::SafeCollect && self.previous_phase != Some(Phase::SafeCollect) {
+                self.safe_collect_count += 1;
+            }
+
+            let length_before = state.colors.len();
             self.apply_moves(&mut state, &plan.moves);
+            if state.colors.len() < length_before {
+                if plan.phase == Phase::BiteRebuild {
+                    self.rebuild_bite_count += 1;
+                } else if plan.phase == Phase::SafeCollect {
+                    self.escape_bite_count += 1;
+                }
+            }
             self.ops.extend(plan.moves.iter().copied());
             self.update_progress(&state, plan.phase, plan.resume_greedy_after_apply);
+            self.previous_phase = Some(plan.phase);
         }
 
         let final_ops = self.ops.clone();
-        self.update_best_snapshot(&final_ops);
+        self.update_best_snapshot(&final_ops, self.current_output_stats(false));
         if let Some(best) = &self.best_snapshot {
             self.ops = best.ops.clone();
         }
@@ -173,7 +208,43 @@ impl Solver {
     }
 
     fn result(&self) {
-        eprintln!("{{ \"score\": {} }}", self.score());
+        let state = self.simulate();
+        let k = state.colors.len();
+        let m = self.input.m;
+        let e = state
+            .colors
+            .iter()
+            .zip(self.input.d.iter())
+            .filter(|(actual, desired)| actual != desired)
+            .count();
+        let t = self.ops.len();
+        let prefix_len = self.prefix_len(&state);
+        let remaining_food = self.remaining_food_count(&state);
+        let score = self.absolute_score(&state, t);
+        let stats = self
+            .best_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.stats.clone())
+            .unwrap_or_else(|| self.current_output_stats(false));
+
+        eprintln!(
+            "{{ \"score\": {}, \"k\": {}, \"m\": {}, \"e\": {}, \"t\": {}, \"prefix_len\": {}, \"remaining_food\": {}, \"completed\": {}, \"full_length\": {}, \"escape_bite_count\": {}, \"rebuild_bite_count\": {}, \"safe_collect_count\": {}, \"forced_safe_collect\": {}, \"used_safe_branch\": {}, \"elapsed_ms\": {} }}",
+            score,
+            k,
+            m,
+            e,
+            t,
+            prefix_len,
+            remaining_food,
+            k == m && e == 0,
+            k == m,
+            stats.escape_bite_count,
+            stats.rebuild_bite_count,
+            stats.safe_collect_count,
+            stats.forced_safe_collect,
+            stats.used_safe_branch,
+            self.start.elapsed().as_millis(),
+        );
     }
 
     fn build_zigzag_path(&self) -> Vec<(usize, usize)> {
@@ -244,10 +315,21 @@ impl Solver {
         turn_count + 10000 * (e + 2 * (self.input.m - k))
     }
 
-    fn update_best_snapshot(&mut self, ops: &[char]) {
+    fn current_output_stats(&self, used_safe_branch: bool) -> OutputStats {
+        OutputStats {
+            escape_bite_count: self.escape_bite_count,
+            rebuild_bite_count: self.rebuild_bite_count,
+            safe_collect_count: self.safe_collect_count,
+            forced_safe_collect: self.force_safe_collect_mode,
+            used_safe_branch,
+        }
+    }
+
+    fn update_best_snapshot(&mut self, ops: &[char], stats: OutputStats) {
         let candidate = OutputSnapshot {
             ops: ops.to_vec(),
             score: self.score_ops(ops),
+            stats,
         };
         if self
             .best_snapshot
@@ -262,24 +344,30 @@ impl Solver {
     }
 
     fn run_safe_branch(&mut self, state: &SnakeState) {
-        let Some(branch_ops) = self.build_safe_branch_ops(state) else {
+        let Some((branch_ops, branch_stats)) = self.build_safe_branch_ops(state) else {
             return;
         };
-        self.update_best_snapshot(&branch_ops);
+        self.update_best_snapshot(&branch_ops, branch_stats);
     }
 
-    fn build_safe_branch_ops(&self, state: &SnakeState) -> Option<Vec<char>> {
+    fn build_safe_branch_ops(&self, state: &SnakeState) -> Option<(Vec<char>, OutputStats)> {
         let mut branch_state = SnakeState {
             board: state.board.clone(),
             positions: state.positions.clone(),
             colors: state.colors.clone(),
         };
         let mut branch_ops = self.ops.clone();
+        let mut branch_escape_bite_count = 0;
 
         while branch_state.colors.len() < self.input.m && branch_ops.len() < 100000 {
-            let moves = self
-                .plan_zigzag_safe_collect_moves(&branch_state)
-                .or_else(|| self.plan_forced_safe_collect_bite(&branch_state))?;
+            let moves = if let Some(moves) = self.plan_zigzag_safe_collect_moves(&branch_state) {
+                moves
+            } else if let Some(moves) = self.plan_forced_safe_collect_bite(&branch_state) {
+                branch_escape_bite_count += 1;
+                moves
+            } else {
+                return None;
+            };
             if moves.is_empty() {
                 return None;
             }
@@ -289,7 +377,16 @@ impl Solver {
         }
 
         if branch_state.colors.len() == self.input.m {
-            Some(branch_ops)
+            Some((
+                branch_ops,
+                OutputStats {
+                    escape_bite_count: branch_escape_bite_count,
+                    rebuild_bite_count: 0,
+                    safe_collect_count: 1,
+                    forced_safe_collect: false,
+                    used_safe_branch: true,
+                },
+            ))
         } else {
             None
         }

@@ -438,3 +438,17 @@
 考察:
 - 変更は脱出用 bite の走査順だけなので、nearest-first と現状方針の差を比較しやすい状態になった
 - BiteRebuild や SafeCollect 全体の設計には触れていないため、差分の原因は escape bite の候補順にほぼ限定される
+変更: `result` JSON に `k`, `m`, `e`, `t`, `prefix_len`, `remaining_food`, `completed`, `full_length`, `escape_bite_count`, `rebuild_bite_count`, `safe_collect_count`, `forced_safe_collect`, `used_safe_branch`, `elapsed_ms` を追加した。最終状態から求まる項目は `result()` で計算し、回数系は `Solver` のカウンタと snapshot 側のメタデータで持つようにした。`simulator.py` は JSON をそのまま列展開して CSV に保存する形へ変更した。
+実行:
+- `cargo check`
+- `Get-Content in/0000.txt | cargo run --quiet > out/0000.main.txt`
+- `python -c "import simulator; print(simulator.main(0))"` 失敗
+- `py -3 -c "import simulator; print(simulator.main(0))"` 失敗
+結果:
+- コンパイル成功
+- `0000` の stderr JSON は `{"score":170,"k":30,"m":30,"e":0,"t":170,"prefix_len":30,"remaining_food":0,"completed":true,"full_length":true,"escape_bite_count":1,"rebuild_bite_count":2,"safe_collect_count":1,"forced_safe_collect":false,"used_safe_branch":false,"elapsed_ms":86}` 相当の 1 オブジェクトで出力された
+- stdout の提出形式と既存の score 取得は維持された
+- `simulator.py` の実行確認は、この環境で `python` / `py` コマンドが見つからず未実施
+考察:
+- seed ごとに `M-k` 由来か `E` 由来か、また SafeCollect / bite / safe branch の絡みかを切り分けやすくなった
+- simulator 側は DataFrame に列を増やすだけの変更なので、既存の平均 score 集計ロジックはそのまま維持している

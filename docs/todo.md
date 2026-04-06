@@ -1,5 +1,17 @@
 ﻿# todo
 
+## ビジュアライザ対応
+
+[x] debug ビルド時のみ `debug.txt` に phase trace を出力する
+[x] 再計画タイミングで `turn phase` 形式のログを書く
+[x] `Phase::as_str()` を追加して phase 名を文字列化できるようにする
+[x] `BfsResult` の dist 行列を debug 用テキストへ変換する関数を追加する
+[x] debug 出力ファイルのブロック形式を `TURN / PHASE / TARGET_COLOR / TARGET / BFS / END` に拡張する
+[x] GreedyTarget の再計画時に、実際に使った BFS スナップショットを debug ファイルへ追記する
+[x] GreedyFallback の再計画時に、実際に使った BFS スナップショットを debug ファイルへ追記する
+[x] debug ビルド時のみ BFS スナップショットを出力し、release では一切出さない
+[x] stdout は提出形式の U/D/L/R のみを維持することを確認する
+
 ## 状態管理と安全モード
 
 [x] safe branch を起動する条件を実装する

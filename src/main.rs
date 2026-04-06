@@ -424,7 +424,7 @@ impl Solver {
     }
 
     fn plan_forced_safe_collect_bite(&self, state: &SnakeState) -> Option<Vec<char>> {
-        for idx in (2..state.positions.len().saturating_sub(1)).rev() {
+        for idx in 2..state.positions.len().saturating_sub(1) {
             if let Some((moves, _)) = self.simulate_bite_candidate(state, idx) {
                 return Some(moves);
             }

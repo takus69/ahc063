@@ -425,3 +425,16 @@
 考察:
 - GreedyTarget / GreedyFallback で「将来空く胴体マスは通れる」という到達可能性の世界観が揃った
 - これで static block 由来の不必要な SafeCollect / bite 落ちが減る方向になり、次の共通核整理にもつなげやすくなった
+変更: 脱出用 bite の候補順を「頭から遠い順」から「頭から近い順」に変更した。前半の escape bite では最初に見つかった合法候補をそのまま採用し、BiteRebuild 側の評価は変更していない。
+実行:
+- `cargo check`
+- `Get-Content in/0000.txt | cargo run --quiet > out/0000.main.txt`
+- `Get-Content in/0003.txt | cargo run --quiet > out/0003.main.txt`
+結果:
+- コンパイル成功
+- `0000` の score JSON は `170`
+- `0003` の score JSON は `631910`
+- stdout は提出形式の操作列のまま、stderr は score JSON のままだった
+考察:
+- 変更は脱出用 bite の走査順だけなので、nearest-first と現状方針の差を比較しやすい状態になった
+- BiteRebuild や SafeCollect 全体の設計には触れていないため、差分の原因は escape bite の候補順にほぼ限定される

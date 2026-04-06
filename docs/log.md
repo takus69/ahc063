@@ -413,3 +413,15 @@
 考察:
 - visualizer 側は solver が実際に使った BFS をそのまま表示できるようになり、再計算由来のズレを切り分けやすくなった
 - phase trace の plain line も残しているため、既存の phase 表示を壊さずに block 形式を追加できている
+変更: GreedyFallback の BFS 到達判定を、GreedyTarget と同じ `cell_open_turn` ベースに揃えた。将来空く胴体マスは `arrival_turn >= cell_open_turn` なら通れるようにし、phase 差分は「最初に到達した餌で停止する」条件だけに残した。
+実行:
+- `cargo check`
+- `Get-Content in/0000.txt | cargo run --quiet > out/0000.main.txt`
+- `Select-String -Path debug.txt -Pattern "^PHASE GreedyFallback$" | Select-Object -First 5`
+結果:
+- コンパイル成功
+- `0000` の score JSON は `21607 -> 20087` に改善
+- `debug.txt` には `PHASE GreedyFallback` の block が引き続き出力され、新しい fallback BFS が debug 出力にも反映された
+考察:
+- GreedyTarget / GreedyFallback で「将来空く胴体マスは通れる」という到達可能性の世界観が揃った
+- これで static block 由来の不必要な SafeCollect / bite 落ちが減る方向になり、次の共通核整理にもつなげやすくなった

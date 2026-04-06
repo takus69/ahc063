@@ -801,12 +801,8 @@ impl Solver {
     fn bfs_reachable_first_food(&self, state: &SnakeState) -> BfsResult {
         let start = state.positions[0];
         let mut result = BfsResult::new(self.input.n, start);
-        let mut blocked = vec![vec![false; self.input.n]; self.input.n];
+        let cell_open_turn = self.build_cell_open_turn(state);
         let mut queue = VecDeque::new();
-
-        for &(i, j) in state.positions.iter().skip(1) {
-            blocked[i][j] = true;
-        }
 
         result.reachable[start.0][start.1] = true;
         result.dist[start.0][start.1] = Some(0);
@@ -825,12 +821,14 @@ impl Solver {
                 let Some(next) = self.try_advance(current, op) else {
                     continue;
                 };
-                if blocked[next.0][next.1] || result.reachable[next.0][next.1] {
+                let arrival_turn = current_dist + 1;
+                let still_occupied = cell_open_turn[next.0][next.1] > arrival_turn;
+                if still_occupied || result.reachable[next.0][next.1] {
                     continue;
                 }
 
                 result.reachable[next.0][next.1] = true;
-                result.dist[next.0][next.1] = Some(current_dist + 1);
+                result.dist[next.0][next.1] = Some(arrival_turn);
                 result.parent[next.0][next.1] = Some(current);
                 result.parent_move[next.0][next.1] = Some(op);
                 queue.push_back(next);
@@ -843,12 +841,8 @@ impl Solver {
     fn bfs_reachable_target_color(&self, state: &SnakeState, target_color: usize) -> BfsResult {
         let start = state.positions[0];
         let mut result = BfsResult::new(self.input.n, start);
-        let mut cell_open_turn = vec![vec![0; self.input.n]; self.input.n];  // ブロックが空くターン数。固定障害物は usize::MAX
+        let mut cell_open_turn = self.build_cell_open_turn(state);
         let mut queue = VecDeque::new();
-
-        for (l, &(i, j)) in state.positions.iter().enumerate().skip(1).rev() {
-            cell_open_turn[i][j] = state.colors.len()-l-1;
-        }
         for i in 0..self.input.n {
             for j in 0..self.input.n {
                 let food = state.board[i][j];
@@ -890,6 +884,14 @@ impl Solver {
         }
 
         result
+    }
+
+    fn build_cell_open_turn(&self, state: &SnakeState) -> Vec<Vec<usize>> {
+        let mut cell_open_turn = vec![vec![0; self.input.n]; self.input.n];
+        for (l, &(i, j)) in state.positions.iter().enumerate().skip(1).rev() {
+            cell_open_turn[i][j] = state.colors.len() - l - 1;
+        }
+        cell_open_turn
     }
 
     fn choose_nearest_food_of_color(

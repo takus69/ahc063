@@ -1,5 +1,12 @@
 ﻿# todo
 
+## BFS改善
+
+[x] GreedyFallback の到達判定を GreedyTarget と同じ動的到達可能性ベースに揃える
+[x] 胴体マスの `cell_open_turn` を使う BFS 共通核を整理する
+[x] GreedyTarget / GreedyFallback で停止条件だけを分ける
+[x] visualizer で fallback の BFS スナップショットが意図どおりか確認する
+
 ## ビジュアライザ対応
 
 [x] debug ビルド時のみ `debug.txt` に phase trace を出力する

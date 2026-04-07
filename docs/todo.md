@@ -2,17 +2,21 @@
 
 ## 停止条件の確認
 
-[ ] `result` JSON に `stop_reason` を追加する
-[ ] SafeCollect 中の bite 候補評価を実装する
-[ ] SafeCollect の回収経路を改善する
+[x] `result` JSON に `stop_reason` を追加する
 
 ## 安全モード改善（E>0を改善）
 
-[ ] SafeCollect を終盤または連続失敗時だけ使う条件を調整する
-[ ] 盤面都合で少し頭側から切る再修復案を比較する
-[ ] bite 再構成で `E` がどこまで下がるかを評価する
+[x] safe branch の採用条件に `E` と `prefix_len` を強く反映する
+[x] SafeCollect 中の bite 候補評価を実装する
+[x] SafeCollect の回収経路を改善する
+[x] SafeCollect の `bite -> zigzag` を改善して色順の崩れを減らす
+[x] SafeCollect を終盤または連続失敗時だけ使う条件を調整する
 
 ## Greedy改善（E=0を増やす）
+
+[ ] `stop_reason = no_plan` のケースを completed に寄せる小改善を検討する
+[ ] 盤面都合で少し頭側から切る再修復案を比較する
+[ ] bite 再構成で `E` がどこまで下がるかを評価する
 
 ## 貪欲強化
 

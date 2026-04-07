@@ -1,5 +1,25 @@
 ﻿# todo
 
+## 貪欲強化
+
+[x] 同じ target への複数経路候補を作れるようにする
+[x] 探索順の違う BFS で経路候補を複数生成する
+[x] 同じ餌に対する経路候補を比較して選ぶ
+[x] 経路候補の比較に次の餌への戻りやすさを入れる
+
+## 分析用出力
+
+[x] `result` JSON に最終状態の要約項目を追加する
+[x] `result` JSON に bite / safe / branch の回数系項目を追加する
+[x] `result` JSON に `completed` / `full_length` を追加する
+[x] simulator.py で追加項目を CSV に出せるようにする
+
+## bite改善
+
+[x] 脱出用 bite の候補順を「頭から近い順」に変更する
+[x] 脱出用 bite 後の再展開しやすさを確認する
+[x] nearest-first と現状方針の差をログで比較する
+
 ## BFS改善
 
 [x] GreedyFallback の到達判定を GreedyTarget と同じ動的到達可能性ベースに揃える
@@ -25,7 +45,6 @@
 [x] safe branch 用に best snapshot を保持する仕組みを実装する
 [x] safe branch で SafeCollect を最後まで実行する処理を実装する
 [x] 最終出力で本線結果と safe branch 結果の良い方を採用する
-[ ] 脱出用 bite の候補評価を実装する
 [ ] SafeCollect を終盤または連続失敗時だけ使う条件を調整する
 [ ] 盤面都合で少し頭側から切る再修復案を比較する
 [ ] bite 再構成で `E` がどこまで下がるかを評価する

@@ -12,6 +12,6 @@ cat .\in\0000.txt | .\target\debug\ahc063.exe > .\out\0000.txt
 - 一括実行
 
 ```
-cargo build
+cargo build --release
 python .\simulator.py
 ```

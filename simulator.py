@@ -9,8 +9,8 @@ import datetime
 
 
 def run(i):
-    output_str = subprocess.run(f'powershell cat in/{i:04}.txt | .\\target\\debug\\ahc063.exe > out/{i:04}.txt', shell=True, capture_output=True, text=True).stderr
-    # output_str = subprocess.run(f'powershell cat in/{i:04}.txt | .\\tester .\\target\\release\\ahc063.exe > out/{i:04}.txt', shell=True, capture_output=True, text=True).stderr
+    # output_str = subprocess.run(f'powershell cat in/{i:04}.txt | .\\target\\debug\\ahc063.exe > out/{i:04}.txt', shell=True, capture_output=True, text=True).stderr
+    output_str = subprocess.run(f'powershell cat in/{i:04}.txt | .\\target\\release\\ahc063.exe > out/{i:04}.txt', shell=True, capture_output=True, text=True).stderr
     # print('output_str:', output_str.split('\n'))
     result = json.loads(output_str.split('\n')[-2])
     return result

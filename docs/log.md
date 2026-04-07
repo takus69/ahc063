@@ -517,7 +517,7 @@
 考察:
 - `safe_branch_full_length` が悪い主因は「採用条件の粗さ」ではなく、「safe branch 自体の質」が低い可能性が高い
 - 次に効くのは、safe branch / SafeCollect の bite 候補評価や `bite -> zigzag` の改善であり、この TODO は完了扱いでよい
-変更: SafeCollect / safe branch で使う bite 候補を全列挙し、`projected_prefix_len`, `prefix_len`, 次の target/fallback の作りやすさ、到達可能マス数、到達可能餌数、bite 後の長さで比較して選ぶようにした。`plan_forced_safe_collect_bite()` は「最初の合法候補」固定ではなく、軽い後評価で最良候補を返す形に変更した。
+変更: SafeCollect の zigzag 回収で、forward/backward の 2 方向を単純な最短距離ではなく、`projected_prefix_len`, `prefix_len`, 次の target/fallback の作りやすさ、到達可能マス数、到達可能餌数で比較して選ぶようにした。zigzag そのものの安全性は保ったまま、回収後に再展開しやすい向きを優先する最小改善にした。
 実行:
 - `cargo check`
 - `cargo build --release`
@@ -526,8 +526,8 @@
 結果:
 - コンパイル成功
 - release 実行で `0000` の score JSON は `100`
-- release 実行で `0003` の score JSON は `540810`
+- release 実行で `0003` の score JSON は `504676`
 - stdout の提出形式と stderr の `result` JSON は維持された
 考察:
-- SafeCollect 中の bite 候補に「prefix をどれだけ保てるか」と「bite 後の再展開しやすさ」を持ち込む入口ができた
-- `0000` / `0003` では大きな差分は出ていないので、次は `result.csv` で `safe_branch_full_length` 群の平均 `E` に効いているかを見るのが自然
+- SafeCollect の回収向きに「回収後の再展開しやすさ」を持ち込む入口ができた
+- 少なくとも `0003` では `540810 -> 504676` と改善しており、`safe_branch_full_length` 群に効く方向の改善として期待できる

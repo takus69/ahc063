@@ -113,6 +113,16 @@ struct SafeCollectBiteEval {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SafeCollectRouteEval {
+    projected_prefix_len: usize,
+    prefix_len: usize,
+    next_target_dist: Option<usize>,
+    next_fallback_dist: Option<usize>,
+    reachable_cell_count: usize,
+    reachable_food_count: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Phase {
     GreedyTarget,
     GreedyFallback,
@@ -1076,7 +1086,9 @@ impl Solver {
 
         match (forward, backward) {
             (Some(left), Some(right)) => {
-                if left.len() <= right.len() {
+                let left_eval = self.evaluate_safe_collect_route_candidate(state, &left);
+                let right_eval = self.evaluate_safe_collect_route_candidate(state, &right);
+                if self.is_better_safe_collect_route_candidate(left_eval, left.len(), right_eval, right.len()) {
                     Some(left)
                 } else {
                     Some(right)
@@ -1117,6 +1129,90 @@ impl Solver {
 
             current = next;
         }
+    }
+
+    fn evaluate_safe_collect_route_candidate(
+        &self,
+        state: &SnakeState,
+        moves: &[char],
+    ) -> SafeCollectRouteEval {
+        let mut next_state = SnakeState {
+            board: state.board.clone(),
+            positions: state.positions.clone(),
+            colors: state.colors.clone(),
+        };
+        self.apply_moves(&mut next_state, moves);
+
+        let next_target_dist = if next_state.colors.len() < self.input.m {
+            let next_target_color = self.input.d[next_state.colors.len()];
+            let next_bfs = self.bfs_reachable_target_color(&next_state, next_target_color);
+            self.choose_nearest_food_of_color(&next_state, &next_bfs, next_target_color)
+                .map(|target| target.dist)
+        } else {
+            Some(0)
+        };
+        let next_fallback_dist = if next_state.colors.len() < self.input.m {
+            let next_bfs = self.bfs_reachable_first_food(&next_state);
+            self.choose_nearest_food(&next_state, &next_bfs)
+                .map(|target| target.dist)
+        } else {
+            Some(0)
+        };
+        let reexpand_bfs = self.bfs_reachable_first_food(&next_state);
+
+        SafeCollectRouteEval {
+            projected_prefix_len: self.project_prefix_after_resume(&next_state),
+            prefix_len: self.prefix_len(&next_state),
+            next_target_dist,
+            next_fallback_dist,
+            reachable_cell_count: reexpand_bfs.reachable_cell_count(),
+            reachable_food_count: reexpand_bfs.reachable_food_count(&next_state),
+        }
+    }
+
+    fn is_better_safe_collect_route_candidate(
+        &self,
+        candidate_eval: SafeCollectRouteEval,
+        candidate_moves_len: usize,
+        current_eval: SafeCollectRouteEval,
+        current_moves_len: usize,
+    ) -> bool {
+        candidate_eval.projected_prefix_len > current_eval.projected_prefix_len
+            || (candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
+                && candidate_eval.prefix_len > current_eval.prefix_len)
+            || (candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
+                && candidate_eval.prefix_len == current_eval.prefix_len
+                && candidate_eval.next_target_dist.is_some()
+                && current_eval.next_target_dist.is_none())
+            || (candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
+                && candidate_eval.prefix_len == current_eval.prefix_len
+                && candidate_eval.next_target_dist.is_some() == current_eval.next_target_dist.is_some()
+                && candidate_eval.next_target_dist.unwrap_or(usize::MAX)
+                    < current_eval.next_target_dist.unwrap_or(usize::MAX))
+            || (candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
+                && candidate_eval.prefix_len == current_eval.prefix_len
+                && candidate_eval.next_target_dist == current_eval.next_target_dist
+                && candidate_eval.next_fallback_dist.is_some()
+                && current_eval.next_fallback_dist.is_none())
+            || (candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
+                && candidate_eval.prefix_len == current_eval.prefix_len
+                && candidate_eval.next_target_dist == current_eval.next_target_dist
+                && candidate_eval.next_fallback_dist.is_some()
+                    == current_eval.next_fallback_dist.is_some()
+                && candidate_eval.next_fallback_dist.unwrap_or(usize::MAX)
+                    < current_eval.next_fallback_dist.unwrap_or(usize::MAX))
+            || (candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
+                && candidate_eval.prefix_len == current_eval.prefix_len
+                && candidate_eval.next_target_dist == current_eval.next_target_dist
+                && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
+                && candidate_eval.reachable_food_count > current_eval.reachable_food_count)
+            || (candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
+                && candidate_eval.prefix_len == current_eval.prefix_len
+                && candidate_eval.next_target_dist == current_eval.next_target_dist
+                && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
+                && candidate_eval.reachable_food_count == current_eval.reachable_food_count
+                && candidate_eval.reachable_cell_count > current_eval.reachable_cell_count)
+            || (candidate_eval == current_eval && candidate_moves_len < current_moves_len)
     }
 
     fn update_progress(

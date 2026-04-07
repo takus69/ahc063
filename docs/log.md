@@ -531,3 +531,18 @@
 考察:
 - SafeCollect の回収向きに「回収後の再展開しやすさ」を持ち込む入口ができた
 - 少なくとも `0003` では `540810 -> 504676` と改善しており、`safe_branch_full_length` 群に効く方向の改善として期待できる
+変更: SafeCollect の bite 候補評価で、bite 後の状態だけでなく「その直後に 1 本の zigzag 回収をつないだ状態」まで見て比較するようにした。これにより、bite 単体ではなく `bite -> zigzag` のつながりが自然な候補を優先する。
+実行:
+- `cargo check`
+- `cargo build --release`
+- `Get-Content in/0000.txt | .\\target\\release\\ahc063.exe > out/0000.release.txt`
+- `Get-Content in/0003.txt | .\\target\\release\\ahc063.exe > out/0003.release.txt`
+結果:
+- コンパイル成功
+- release 実行で `0000` の score JSON は `100`
+- release 実行で `0003` の score JSON は `456955`
+- `0003` では `E = 45`, `prefix_len = 44` まで改善した
+- stdout の提出形式と stderr の `result` JSON は維持された
+考察:
+- bite 候補の比較に「直後の zigzag 接続」を入れたことで、safe branch の `E` を下げる方向の改善が見えた
+- 少なくとも `0003` では `504676 -> 456955` と改善しており、次は 200 ケース集計で `safe_branch_full_length` 群の平均 `E` がどこまで下がるかを見るのが自然

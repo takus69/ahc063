@@ -103,6 +103,7 @@ struct GreedyTargetEval {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SafeCollectBiteEval {
+    followup_food_collected: bool,
     projected_prefix_len: usize,
     prefix_len: usize,
     next_target_dist: Option<usize>,
@@ -110,6 +111,7 @@ struct SafeCollectBiteEval {
     reachable_cell_count: usize,
     reachable_food_count: usize,
     bitten_length: usize,
+    followup_len: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -625,31 +627,43 @@ impl Solver {
     }
 
     fn evaluate_safe_collect_bite_candidate(&self, bitten: &SnakeState) -> SafeCollectBiteEval {
-        let next_target_dist = if bitten.colors.len() < self.input.m {
-            let next_target_color = self.input.d[bitten.colors.len()];
-            let next_bfs = self.bfs_reachable_target_color(bitten, next_target_color);
-            self.choose_nearest_food_of_color(bitten, &next_bfs, next_target_color)
+        let mut followed = SnakeState {
+            board: bitten.board.clone(),
+            positions: bitten.positions.clone(),
+            colors: bitten.colors.clone(),
+        };
+        let zigzag_followup = self.plan_zigzag_safe_collect_moves(bitten);
+        if let Some(moves) = zigzag_followup.as_ref() {
+            self.apply_moves(&mut followed, moves);
+        }
+
+        let next_target_dist = if followed.colors.len() < self.input.m {
+            let next_target_color = self.input.d[followed.colors.len()];
+            let next_bfs = self.bfs_reachable_target_color(&followed, next_target_color);
+            self.choose_nearest_food_of_color(&followed, &next_bfs, next_target_color)
                 .map(|target| target.dist)
         } else {
             Some(0)
         };
-        let next_fallback_dist = if bitten.colors.len() < self.input.m {
-            let next_bfs = self.bfs_reachable_first_food(bitten);
-            self.choose_nearest_food(bitten, &next_bfs)
+        let next_fallback_dist = if followed.colors.len() < self.input.m {
+            let next_bfs = self.bfs_reachable_first_food(&followed);
+            self.choose_nearest_food(&followed, &next_bfs)
                 .map(|target| target.dist)
         } else {
             Some(0)
         };
-        let reexpand_bfs = self.bfs_reachable_first_food(bitten);
+        let reexpand_bfs = self.bfs_reachable_first_food(&followed);
 
         SafeCollectBiteEval {
-            projected_prefix_len: self.project_prefix_after_resume(bitten),
-            prefix_len: self.prefix_len(bitten),
+            followup_food_collected: zigzag_followup.is_some(),
+            projected_prefix_len: self.project_prefix_after_resume(&followed),
+            prefix_len: self.prefix_len(&followed),
             next_target_dist,
             next_fallback_dist,
             reachable_cell_count: reexpand_bfs.reachable_cell_count(),
-            reachable_food_count: reexpand_bfs.reachable_food_count(bitten),
+            reachable_food_count: reexpand_bfs.reachable_food_count(&followed),
             bitten_length: bitten.colors.len(),
+            followup_len: zigzag_followup.as_ref().map_or(usize::MAX, |moves| moves.len()),
         }
     }
 
@@ -660,48 +674,67 @@ impl Solver {
         current_eval: SafeCollectBiteEval,
         current_moves_len: usize,
     ) -> bool {
-        candidate_eval.projected_prefix_len > current_eval.projected_prefix_len
-            || (candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
+        candidate_eval.followup_food_collected && !current_eval.followup_food_collected
+            || (candidate_eval.followup_food_collected == current_eval.followup_food_collected
+                && candidate_eval.projected_prefix_len > current_eval.projected_prefix_len)
+            || (candidate_eval.followup_food_collected == current_eval.followup_food_collected
+                && candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
                 && candidate_eval.prefix_len > current_eval.prefix_len)
-            || (candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
+            || (candidate_eval.followup_food_collected == current_eval.followup_food_collected
+                && candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
                 && candidate_eval.prefix_len == current_eval.prefix_len
                 && candidate_eval.next_target_dist.is_some()
                 && current_eval.next_target_dist.is_none())
-            || (candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
+            || (candidate_eval.followup_food_collected == current_eval.followup_food_collected
+                && candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
                 && candidate_eval.prefix_len == current_eval.prefix_len
                 && candidate_eval.next_target_dist.is_some() == current_eval.next_target_dist.is_some()
                 && candidate_eval.next_target_dist.unwrap_or(usize::MAX)
                     < current_eval.next_target_dist.unwrap_or(usize::MAX))
-            || (candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
+            || (candidate_eval.followup_food_collected == current_eval.followup_food_collected
+                && candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
                 && candidate_eval.prefix_len == current_eval.prefix_len
                 && candidate_eval.next_target_dist == current_eval.next_target_dist
                 && candidate_eval.next_fallback_dist.is_some()
                 && current_eval.next_fallback_dist.is_none())
-            || (candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
+            || (candidate_eval.followup_food_collected == current_eval.followup_food_collected
+                && candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
                 && candidate_eval.prefix_len == current_eval.prefix_len
                 && candidate_eval.next_target_dist == current_eval.next_target_dist
                 && candidate_eval.next_fallback_dist.is_some()
                     == current_eval.next_fallback_dist.is_some()
                 && candidate_eval.next_fallback_dist.unwrap_or(usize::MAX)
                     < current_eval.next_fallback_dist.unwrap_or(usize::MAX))
-            || (candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
+            || (candidate_eval.followup_food_collected == current_eval.followup_food_collected
+                && candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
                 && candidate_eval.prefix_len == current_eval.prefix_len
                 && candidate_eval.next_target_dist == current_eval.next_target_dist
                 && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
                 && candidate_eval.reachable_food_count > current_eval.reachable_food_count)
-            || (candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
+            || (candidate_eval.followup_food_collected == current_eval.followup_food_collected
+                && candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
                 && candidate_eval.prefix_len == current_eval.prefix_len
                 && candidate_eval.next_target_dist == current_eval.next_target_dist
                 && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
                 && candidate_eval.reachable_food_count == current_eval.reachable_food_count
                 && candidate_eval.reachable_cell_count > current_eval.reachable_cell_count)
-            || (candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
+            || (candidate_eval.followup_food_collected == current_eval.followup_food_collected
+                && candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
                 && candidate_eval.prefix_len == current_eval.prefix_len
                 && candidate_eval.next_target_dist == current_eval.next_target_dist
                 && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
                 && candidate_eval.reachable_food_count == current_eval.reachable_food_count
                 && candidate_eval.reachable_cell_count == current_eval.reachable_cell_count
                 && candidate_eval.bitten_length > current_eval.bitten_length)
+            || (candidate_eval.followup_food_collected == current_eval.followup_food_collected
+                && candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
+                && candidate_eval.prefix_len == current_eval.prefix_len
+                && candidate_eval.next_target_dist == current_eval.next_target_dist
+                && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
+                && candidate_eval.reachable_food_count == current_eval.reachable_food_count
+                && candidate_eval.reachable_cell_count == current_eval.reachable_cell_count
+                && candidate_eval.bitten_length == current_eval.bitten_length
+                && candidate_eval.followup_len < current_eval.followup_len)
             || (candidate_eval == current_eval && candidate_moves_len < current_moves_len)
     }
 

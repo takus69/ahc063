@@ -8,6 +8,12 @@ use std::io::Write;
 const FALLBACK_STALL_LIMIT: usize = 3;
 const SAFE_COLLECT_TIME_LIMIT_MS: u128 = 1900;
 const SAFE_COLLECT_TURN_LIMIT: usize = 10000;
+const TARGET_BFS_ORDERS: [[char; 4]; 4] = [
+    ['U', 'D', 'L', 'R'],
+    ['R', 'D', 'L', 'U'],
+    ['L', 'U', 'R', 'D'],
+    ['D', 'R', 'U', 'L'],
+];
 
 fn read_input() -> Input {
     input! {
@@ -583,15 +589,99 @@ impl Solver {
         state: &SnakeState,
     ) -> Option<(Plan, BfsResult, FoodTarget, usize)> {
         let target_color = self.input.d[state.colors.len()];
-        let bfs = self.bfs_reachable_target_color(state, target_color);
-        let target = self.choose_nearest_food_of_color(state, &bfs, target_color)?;
-        let moves = bfs.restore_moves(target.cell)?;
-        let plan = Plan {
-            phase: Phase::GreedyTarget,
-            moves,
-            resume_greedy_after_apply: false,
-        };
+        let primary_bfs =
+            self.bfs_reachable_target_color_with_order(state, target_color, &TARGET_BFS_ORDERS[0]);
+        let target = self.choose_nearest_food_of_color(state, &primary_bfs, target_color)?;
+        let mut seen_moves = Vec::new();
+        let mut best: Option<(bool, usize, bool, usize, usize, usize, Plan, BfsResult)> = None;
+
+        for order in TARGET_BFS_ORDERS {
+            let bfs = self.bfs_reachable_target_color_with_order(state, target_color, &order);
+            let Some(moves) = bfs.restore_moves(target.cell) else {
+                continue;
+            };
+            if seen_moves.iter().any(|existing: &Vec<char>| *existing == moves) {
+                continue;
+            }
+            seen_moves.push(moves.clone());
+
+            let (next_target_dist, next_fallback_dist, next_prefix_len) =
+                self.evaluate_greedy_target_candidate(state, &moves);
+            let candidate = (
+                next_target_dist.is_some(),
+                next_target_dist.unwrap_or(usize::MAX),
+                next_fallback_dist.is_some(),
+                next_fallback_dist.unwrap_or(usize::MAX),
+                next_prefix_len,
+                moves.len(),
+                Plan {
+                    phase: Phase::GreedyTarget,
+                    moves,
+                    resume_greedy_after_apply: false,
+                },
+                bfs,
+            );
+
+            if best.as_ref().is_none_or(|current| {
+                candidate.0 && !current.0
+                    || (candidate.0 == current.0 && candidate.1 < current.1)
+                    || (candidate.0 == current.0
+                        && candidate.1 == current.1
+                        && candidate.2
+                        && !current.2)
+                    || (candidate.0 == current.0
+                        && candidate.1 == current.1
+                        && candidate.2 == current.2
+                        && candidate.3 < current.3)
+                    || (candidate.0 == current.0
+                        && candidate.1 == current.1
+                        && candidate.2 == current.2
+                        && candidate.3 == current.3
+                        && candidate.4 > current.4)
+                    || (candidate.0 == current.0
+                        && candidate.1 == current.1
+                        && candidate.2 == current.2
+                        && candidate.3 == current.3
+                        && candidate.4 == current.4
+                        && candidate.5 < current.5)
+            }) {
+                best = Some(candidate);
+            }
+        }
+
+        let (_, _, _, _, _, _, plan, bfs) = best?;
         Some((plan, bfs, target, target_color))
+    }
+
+    fn evaluate_greedy_target_candidate(
+        &self,
+        state: &SnakeState,
+        moves: &[char],
+    ) -> (Option<usize>, Option<usize>, usize) {
+        let mut next_state = SnakeState {
+            board: state.board.clone(),
+            positions: state.positions.clone(),
+            colors: state.colors.clone(),
+        };
+        self.apply_moves(&mut next_state, moves);
+
+        let next_target_dist = if next_state.colors.len() < self.input.m {
+            let next_target_color = self.input.d[next_state.colors.len()];
+            let next_bfs = self.bfs_reachable_target_color(&next_state, next_target_color);
+            self.choose_nearest_food_of_color(&next_state, &next_bfs, next_target_color)
+                .map(|target| target.dist)
+        } else {
+            Some(0)
+        };
+        let next_fallback_dist = if next_state.colors.len() < self.input.m {
+            let next_bfs = self.bfs_reachable_first_food(&next_state);
+            self.choose_nearest_food(&next_state, &next_bfs)
+                .map(|target| target.dist)
+        } else {
+            Some(0)
+        };
+
+        (next_target_dist, next_fallback_dist, self.prefix_len(&next_state))
     }
 
     fn plan_greedy_fallback_inner(
@@ -936,6 +1026,15 @@ impl Solver {
     }
 
     fn bfs_reachable_target_color(&self, state: &SnakeState, target_color: usize) -> BfsResult {
+        self.bfs_reachable_target_color_with_order(state, target_color, &TARGET_BFS_ORDERS[0])
+    }
+
+    fn bfs_reachable_target_color_with_order(
+        &self,
+        state: &SnakeState,
+        target_color: usize,
+        order: &[char; 4],
+    ) -> BfsResult {
         let start = state.positions[0];
         let mut result = BfsResult::new(self.input.n, start);
         let mut cell_open_turn = self.build_cell_open_turn(state);
@@ -962,7 +1061,7 @@ impl Solver {
                 continue;
             }
 
-            for op in ['U', 'D', 'L', 'R'] {
+            for &op in order {
                 let Some(next) = self.try_advance(current, op) else {
                     continue;
                 };

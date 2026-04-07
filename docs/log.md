@@ -452,3 +452,16 @@
 考察:
 - seed ごとに `M-k` 由来か `E` 由来か、また SafeCollect / bite / safe branch の絡みかを切り分けやすくなった
 - simulator 側は DataFrame に列を増やすだけの変更なので、既存の平均 score 集計ロジックはそのまま維持している
+変更: GreedyTarget で同じ target cell に対して探索順の違う BFS を複数回回し、重複しない経路候補を比較して選ぶようにした。探索順は `UDLR`, `RDLU`, `LURD`, `DRUL` の 4 通りで、候補比較は「次の target が作れるか」「次の fallback が作れるか」「その距離」「現在の prefix」「移動手数」の順に行う最小実装にした。
+実行:
+- `cargo check`
+- `Get-Content in/0000.txt | cargo run --quiet > out/0000.main.txt`
+- `Select-String -Path debug.txt -Pattern "^PHASE GreedyTarget$|^TURN " | Select-Object -First 12`
+結果:
+- コンパイル成功
+- `0000` の score JSON は `771`
+- stdout は提出形式の操作列のまま、stderr の `result` JSON も維持された
+- debug ビルド実行後も `debug.txt` は更新され、既存の debug 出力経路は壊れていない
+考察:
+- 同じ餌でも経路の違いで次の target / fallback の作りやすさを比較できる入口ができた
+- 今回は GreedyTarget だけの最小実装なので、差分要因は「経路候補の複数化と軽い後評価」に限定される

@@ -561,3 +561,17 @@
 考察:
 - 軽い 2 ケース確認では差分は出ていないが、SafeCollect 本体ではなく safe branch 起動条件だけを調整できた
 - 効果の有無は 200 ケースで `safe_branch_full_length` 件数と completed の変化を見る必要がある
+変更: `stop_reason = no_plan` の主因として、`M = k` 後の `BiteRebuild` が「噛み切り直後の全 prefix 一致」を要求しすぎて候補ゼロになる点を確認した。そこで通常候補が無いときだけ、`projected_prefix_len` または `prefix_len` が現在より伸びる緩い bite 候補を 1 段だけ許すようにした。
+実行:
+- `cargo check`
+- `cargo build --release`
+- `Get-Content in/0000.txt | .\\target\\release\\ahc063.exe > out/0000.release.txt`
+- `Get-Content in/0003.txt | .\\target\\release\\ahc063.exe > out/0003.release.txt`
+結果:
+- コンパイル成功
+- release 実行で `0000` の score JSON は `100`
+- release 実行で `0003` の score JSON は `456955`
+- 軽い 2 ケース確認では score / stop_reason に差分は出なかった
+考察:
+- 今回の変更は `no_plan` の根因に対する小さな緩和であり、効果は `M = k` だがあと少しで詰まるケース群に寄るはず
+- 有効性の判断には 200 ケースで `no_plan` 件数と completed の差分を見る必要がある

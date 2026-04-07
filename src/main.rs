@@ -537,19 +537,19 @@ impl Solver {
     }
 
     fn plan_bite_rebuild(&self, state: &SnakeState) -> Option<Plan> {
-        let mut best: Option<(usize, usize, usize, Vec<char>)> = None;
+        let current_prefix_len = self.prefix_len(state);
+        let mut best_strict: Option<(usize, usize, usize, Vec<char>)> = None;
+        let mut best_relaxed: Option<(usize, usize, usize, Vec<char>)> = None;
 
         for idx in 2..state.positions.len().saturating_sub(1) {
             let Some((moves, bitten)) = self.simulate_bite_candidate(state, idx) else {
                 continue;
             };
             let prefix_len = self.prefix_len(&bitten);
-            if prefix_len != bitten.colors.len() {
-                continue;
-            }
             let repaired_prefix_len = self.project_prefix_after_resume(&bitten);
             let candidate = (repaired_prefix_len, prefix_len, bitten.colors.len(), moves);
-            if best.as_ref().is_none_or(|current| {
+            if prefix_len == bitten.colors.len()
+                && best_strict.as_ref().is_none_or(|current| {
                 candidate.0 > current.0
                     || (candidate.0 == current.0 && candidate.1 > current.1)
                     || (candidate.0 == current.0 && candidate.1 == current.1 && candidate.2 > current.2)
@@ -557,12 +557,26 @@ impl Solver {
                         && candidate.1 == current.1
                         && candidate.2 == current.2
                         && candidate.3.len() < current.3.len())
-            }) {
-                best = Some(candidate);
+            })
+            {
+                best_strict = Some(candidate.clone());
+            }
+            if (repaired_prefix_len > current_prefix_len || prefix_len > current_prefix_len)
+                && best_relaxed.as_ref().is_none_or(|current| {
+                    candidate.0 > current.0
+                        || (candidate.0 == current.0 && candidate.1 > current.1)
+                        || (candidate.0 == current.0 && candidate.1 == current.1 && candidate.2 > current.2)
+                        || (candidate.0 == current.0
+                            && candidate.1 == current.1
+                            && candidate.2 == current.2
+                            && candidate.3.len() < current.3.len())
+                })
+            {
+                best_relaxed = Some(candidate);
             }
         }
 
-        let (_, _, _, moves) = best?;
+        let (_, _, _, moves) = best_strict.or(best_relaxed)?;
         Some(Plan {
             phase: Phase::BiteRebuild,
             moves,

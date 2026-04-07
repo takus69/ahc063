@@ -507,3 +507,13 @@
 考察:
 - seed ごとに「完全一致で終わったのか」「safe branch 由来で full length を確保したのか」「no plan 系で止まったのか」を後から切り分けやすくなった
 - 次の SafeCollect 改善と Greedy 改善の優先順位付けに直接使える分析項目になった
+変更: safe branch の採用条件を確認した。現状の [update_best_snapshot()](/C:/workspaces/AHC/ahc063/src/main.rs#L366) は `score_ops()` による最終絶対スコアを本線 / safe branch ともに厳密比較しており、同点時だけ操作手数で比較している。したがって、この TODO に対するコード変更は行わなかった。
+実行:
+- `cargo check`
+結果:
+- コンパイル成功
+- safe branch 採用条件はすでに最終 `score` 完全比較であることを確認した
+- `E` や `prefix_len` を別途採用条件へ足しても、現在の実装では `score` に対して冗長になる
+考察:
+- `safe_branch_full_length` が悪い主因は「採用条件の粗さ」ではなく、「safe branch 自体の質」が低い可能性が高い
+- 次に効くのは、safe branch / SafeCollect の bite 候補評価や `bite -> zigzag` の改善であり、この TODO は完了扱いでよい

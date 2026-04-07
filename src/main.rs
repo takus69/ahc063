@@ -8,6 +8,8 @@ use std::io::Write;
 const FALLBACK_STALL_LIMIT: usize = 3;
 const SAFE_COLLECT_TIME_LIMIT_MS: u128 = 1900;
 const SAFE_COLLECT_TURN_LIMIT: usize = 10000;
+const SAFE_BRANCH_ENDGAME_REMAINING_FOOD_LIMIT: usize = 24;
+const SAFE_BRANCH_MIN_SAFE_COLLECT_COUNT: usize = 2;
 const GREEDY_TARGET_CANDIDATE_LIMIT: usize = 3;
 const GREEDY_FALLBACK_CANDIDATE_LIMIT: usize = 3;
 const TARGET_BFS_ORDERS: [[char; 4]; 4] = [
@@ -1055,6 +1057,9 @@ impl Solver {
             && state.colors.len() < self.input.m
             && plan.phase == Phase::SafeCollect
             && plan.resume_greedy_after_apply
+            && (self.remaining_food_count(state) <= SAFE_BRANCH_ENDGAME_REMAINING_FOOD_LIMIT
+                || self.is_progress_stalled()
+                || self.safe_collect_count + 1 >= SAFE_BRANCH_MIN_SAFE_COLLECT_COUNT)
     }
 
     fn bfs_reachable_body_target(&self, state: &SnakeState, target: (usize, usize)) -> BfsResult {

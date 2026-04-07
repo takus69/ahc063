@@ -546,3 +546,18 @@
 考察:
 - bite 候補の比較に「直後の zigzag 接続」を入れたことで、safe branch の `E` を下げる方向の改善が見えた
 - 少なくとも `0003` では `504676 -> 456955` と改善しており、次は 200 ケース集計で `safe_branch_full_length` 群の平均 `E` がどこまで下がるかを見るのが自然
+変更: safe branch を毎回の escape bite で起動せず、終盤または連続失敗寄りのときだけ起動するように条件を絞った。具体的には、残り餌数が少ないか、進展 stalled か、SafeCollect 進入回数が 2 回以上のときだけ launch する。
+実行:
+- `cargo check`
+- `cargo build --release`
+- `Get-Content in/0000.txt | .\\target\\release\\ahc063.exe > out/0000.release.txt`
+- `Get-Content in/0003.txt | .\\target\\release\\ahc063.exe > out/0003.release.txt`
+結果:
+- コンパイル成功
+- release 実行で `0000` の score JSON は `100`
+- release 実行で `0003` の score JSON は `456955`
+- `0000` は `stop_reason = "completed"`、`0003` は `stop_reason = "safe_branch_full_length"` で据え置きだった
+- stdout の提出形式と stderr の `result` JSON は維持された
+考察:
+- 軽い 2 ケース確認では差分は出ていないが、SafeCollect 本体ではなく safe branch 起動条件だけを調整できた
+- 効果の有無は 200 ケースで `safe_branch_full_length` 件数と completed の変化を見る必要がある

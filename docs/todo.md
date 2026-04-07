@@ -1,11 +1,33 @@
 ﻿# todo
 
+## 停止条件の確認
+
+[ ] `result` JSON に `stop_reason` を追加する
+[ ] SafeCollect 中の bite 候補評価を実装する
+[ ] SafeCollect の回収経路を改善する
+
+## 安全モード改善（E>0を改善）
+
+[ ] SafeCollect を終盤または連続失敗時だけ使う条件を調整する
+[ ] 盤面都合で少し頭側から切る再修復案を比較する
+[ ] bite 再構成で `E` がどこまで下がるかを評価する
+
+## Greedy改善（E=0を増やす）
+
 ## 貪欲強化
 
 [x] 同じ target への複数経路候補を作れるようにする
 [x] 探索順の違う BFS で経路候補を複数生成する
 [x] 同じ餌に対する経路候補を比較して選ぶ
 [x] 経路候補の比較に次の餌への戻りやすさを入れる
+[x] GreedyTarget で同色餌の上位 K 候補を列挙して比較する
+[x] target 候補ごとに複数経路候補を比較する
+[x] 候補評価に到達可能マス数と到達可能餌数を追加する
+[x] 複数経路化が効いた seed / 悪化した seed を result.csv で切り分ける
+[x] GreedyFallback で候補餌を複数比較できるようにする
+[x] GreedyFallback で同じ餌への複数経路候補を比較する
+[x] GreedyFallback の候補数を小さく制限して計算量を抑える
+[x] release 実行で GreedyFallback 強化の効果を確認する
 
 ## 分析用出力
 
@@ -45,9 +67,6 @@
 [x] safe branch 用に best snapshot を保持する仕組みを実装する
 [x] safe branch で SafeCollect を最後まで実行する処理を実装する
 [x] 最終出力で本線結果と safe branch 結果の良い方を採用する
-[ ] SafeCollect を終盤または連続失敗時だけ使う条件を調整する
-[ ] 盤面都合で少し頭側から切る再修復案を比較する
-[ ] bite 再構成で `E` がどこまで下がるかを評価する
 
 ## M=k, E=0 達成戦略
 

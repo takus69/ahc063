@@ -493,3 +493,17 @@
 考察:
 - GreedyFallback でも「どの餌を取るか」「どの入り方で取るか」を少数候補から比較できる入口ができた
 - 今回は候補数を 3 に固定した最小実装なので、次は `result.csv` で completed や full_length に効いた seed を切り分けるのが自然
+変更: `solve()` の終了分岐ごとに `stop_reason` を持たせ、`result` JSON に追加した。`completed`, `force_safe_full_length`, `no_plan`, `empty_plan`, `turn_limit` を本線側で区別し、safe branch 採用時は `safe_branch_full_length` を snapshot 側から返すようにした。`simulator.py` には `stop_reason` 列を追加した。
+実行:
+- `cargo check`
+- `cargo build --release`
+- `Get-Content in/0000.txt | .\\target\\release\\ahc063.exe > out/0000.release.txt`
+- `Get-Content in/0003.txt | .\\target\\release\\ahc063.exe > out/0003.release.txt`
+結果:
+- コンパイル成功
+- `0000` の result JSON に `stop_reason: "completed"` が追加された
+- `0003` の result JSON に `stop_reason: "safe_branch_full_length"` が追加された
+- stdout の提出形式と既存の score / completed / full_length / 各カウンタは維持された
+考察:
+- seed ごとに「完全一致で終わったのか」「safe branch 由来で full length を確保したのか」「no plan 系で止まったのか」を後から切り分けやすくなった
+- 次の SafeCollect 改善と Greedy 改善の優先順位付けに直接使える分析項目になった

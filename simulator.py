@@ -60,6 +60,7 @@ def run_simulate(trial=200):
         'safe_collect_count',
         'forced_safe_collect',
         'used_safe_branch',
+        'stop_reason',
         'elapsed_ms',
         'time',
     ]

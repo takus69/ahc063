@@ -51,6 +51,7 @@ struct Solver {
     rebuild_bite_count: usize,
     safe_collect_count: usize,
     previous_phase: Option<Phase>,
+    stop_reason: &'static str,
 }
 
 struct SnakeState {
@@ -73,6 +74,7 @@ struct OutputStats {
     safe_collect_count: usize,
     forced_safe_collect: bool,
     used_safe_branch: bool,
+    stop_reason: &'static str,
 }
 
 #[derive(Clone, Debug)]
@@ -151,6 +153,7 @@ impl Solver {
             rebuild_bite_count: 0,
             safe_collect_count: 0,
             previous_phase: None,
+            stop_reason: "unknown",
         }
     }
 
@@ -165,9 +168,23 @@ impl Solver {
         self.rebuild_bite_count = 0;
         self.safe_collect_count = 0;
         self.previous_phase = None;
+        self.stop_reason = "unknown";
         self.reset_phase_trace();
 
-        while !self.should_stop(&state) && self.ops.len() < 100000 {
+        loop {
+            if self.should_stop(&state) {
+                self.stop_reason = if self.force_safe_collect_mode && state.colors.len() == self.input.m {
+                    "force_safe_full_length"
+                } else {
+                    "completed"
+                };
+                break;
+            }
+            if self.ops.len() >= 100000 {
+                self.stop_reason = "turn_limit";
+                break;
+            }
+
             let phase = self.choose_phase(&state);
             self.write_phase_trace(self.ops.len(), phase);
             let plan = match phase {
@@ -177,10 +194,12 @@ impl Solver {
                 Phase::BiteRebuild => self.plan_bite_rebuild(&state),
             };
             let Some(plan) = plan else {
+                self.stop_reason = "no_plan";
                 break;
             };
 
             if plan.moves.is_empty() {
+                self.stop_reason = "empty_plan";
                 break;
             }
 
@@ -245,7 +264,7 @@ impl Solver {
             .unwrap_or_else(|| self.current_output_stats(false));
 
         eprintln!(
-            "{{ \"score\": {}, \"k\": {}, \"m\": {}, \"e\": {}, \"t\": {}, \"prefix_len\": {}, \"remaining_food\": {}, \"completed\": {}, \"full_length\": {}, \"escape_bite_count\": {}, \"rebuild_bite_count\": {}, \"safe_collect_count\": {}, \"forced_safe_collect\": {}, \"used_safe_branch\": {}, \"elapsed_ms\": {} }}",
+            "{{ \"score\": {}, \"k\": {}, \"m\": {}, \"e\": {}, \"t\": {}, \"prefix_len\": {}, \"remaining_food\": {}, \"completed\": {}, \"full_length\": {}, \"escape_bite_count\": {}, \"rebuild_bite_count\": {}, \"safe_collect_count\": {}, \"forced_safe_collect\": {}, \"used_safe_branch\": {}, \"stop_reason\": \"{}\", \"elapsed_ms\": {} }}",
             score,
             k,
             m,
@@ -260,6 +279,7 @@ impl Solver {
             stats.safe_collect_count,
             stats.forced_safe_collect,
             stats.used_safe_branch,
+            stats.stop_reason,
             self.start.elapsed().as_millis(),
         );
     }
@@ -339,6 +359,7 @@ impl Solver {
             safe_collect_count: self.safe_collect_count,
             forced_safe_collect: self.force_safe_collect_mode,
             used_safe_branch,
+            stop_reason: self.stop_reason,
         }
     }
 
@@ -402,6 +423,7 @@ impl Solver {
                     safe_collect_count: 1,
                     forced_safe_collect: false,
                     used_safe_branch: true,
+                    stop_reason: "safe_branch_full_length",
                 },
             ))
         } else {

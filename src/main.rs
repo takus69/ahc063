@@ -8,6 +8,7 @@ use std::io::Write;
 const FALLBACK_STALL_LIMIT: usize = 3;
 const SAFE_COLLECT_TIME_LIMIT_MS: u128 = 1900;
 const SAFE_COLLECT_TURN_LIMIT: usize = 10000;
+const GREEDY_TARGET_CANDIDATE_LIMIT: usize = 3;
 const TARGET_BFS_ORDERS: [[char; 4]; 4] = [
     ['U', 'D', 'L', 'R'],
     ['R', 'D', 'L', 'U'],
@@ -86,6 +87,15 @@ struct BfsResult {
 struct FoodTarget {
     cell: (usize, usize),
     dist: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct GreedyTargetEval {
+    next_target_dist: Option<usize>,
+    next_fallback_dist: Option<usize>,
+    reachable_cell_count: usize,
+    reachable_food_count: usize,
+    prefix_len: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -591,73 +601,92 @@ impl Solver {
         let target_color = self.input.d[state.colors.len()];
         let primary_bfs =
             self.bfs_reachable_target_color_with_order(state, target_color, &TARGET_BFS_ORDERS[0]);
-        let target = self.choose_nearest_food_of_color(state, &primary_bfs, target_color)?;
-        let mut seen_moves = Vec::new();
-        let mut best: Option<(bool, usize, bool, usize, usize, usize, Plan, BfsResult)> = None;
+        let targets =
+            self.choose_top_foods_of_color(state, &primary_bfs, target_color, GREEDY_TARGET_CANDIDATE_LIMIT);
+        let mut best: Option<(GreedyTargetEval, usize, Plan, BfsResult, FoodTarget)> = None;
 
-        for order in TARGET_BFS_ORDERS {
-            let bfs = self.bfs_reachable_target_color_with_order(state, target_color, &order);
-            let Some(moves) = bfs.restore_moves(target.cell) else {
-                continue;
-            };
-            if seen_moves.iter().any(|existing: &Vec<char>| *existing == moves) {
-                continue;
-            }
-            seen_moves.push(moves.clone());
+        for target in targets {
+            let mut seen_moves = Vec::new();
+            for order in TARGET_BFS_ORDERS {
+                let bfs = self.bfs_reachable_target_color_with_order(state, target_color, &order);
+                let Some(moves) = bfs.restore_moves(target.cell) else {
+                    continue;
+                };
+                if seen_moves.iter().any(|existing: &Vec<char>| *existing == moves) {
+                    continue;
+                }
+                seen_moves.push(moves.clone());
 
-            let (next_target_dist, next_fallback_dist, next_prefix_len) =
-                self.evaluate_greedy_target_candidate(state, &moves);
-            let candidate = (
-                next_target_dist.is_some(),
-                next_target_dist.unwrap_or(usize::MAX),
-                next_fallback_dist.is_some(),
-                next_fallback_dist.unwrap_or(usize::MAX),
-                next_prefix_len,
-                moves.len(),
-                Plan {
-                    phase: Phase::GreedyTarget,
-                    moves,
-                    resume_greedy_after_apply: false,
-                },
-                bfs,
-            );
+                let eval = self.evaluate_greedy_target_candidate(state, &moves);
+                let candidate = (
+                    eval,
+                    moves.len(),
+                    Plan {
+                        phase: Phase::GreedyTarget,
+                        moves,
+                        resume_greedy_after_apply: false,
+                    },
+                    bfs,
+                    target,
+                );
 
-            if best.as_ref().is_none_or(|current| {
-                candidate.0 && !current.0
-                    || (candidate.0 == current.0 && candidate.1 < current.1)
-                    || (candidate.0 == current.0
-                        && candidate.1 == current.1
-                        && candidate.2
-                        && !current.2)
-                    || (candidate.0 == current.0
-                        && candidate.1 == current.1
-                        && candidate.2 == current.2
-                        && candidate.3 < current.3)
-                    || (candidate.0 == current.0
-                        && candidate.1 == current.1
-                        && candidate.2 == current.2
-                        && candidate.3 == current.3
-                        && candidate.4 > current.4)
-                    || (candidate.0 == current.0
-                        && candidate.1 == current.1
-                        && candidate.2 == current.2
-                        && candidate.3 == current.3
-                        && candidate.4 == current.4
-                        && candidate.5 < current.5)
-            }) {
-                best = Some(candidate);
+                if best.as_ref().is_none_or(|current| {
+                    self.is_better_greedy_target_candidate(
+                        candidate.0,
+                        candidate.1,
+                        current.0,
+                        current.1,
+                    )
+                }) {
+                    best = Some(candidate);
+                }
             }
         }
 
-        let (_, _, _, _, _, _, plan, bfs) = best?;
+        let (_, _, plan, bfs, target) = best?;
         Some((plan, bfs, target, target_color))
     }
 
-    fn evaluate_greedy_target_candidate(
+    fn is_better_greedy_target_candidate(
         &self,
-        state: &SnakeState,
-        moves: &[char],
-    ) -> (Option<usize>, Option<usize>, usize) {
+        candidate_eval: GreedyTargetEval,
+        candidate_moves_len: usize,
+        current_eval: GreedyTargetEval,
+        current_moves_len: usize,
+    ) -> bool {
+        candidate_eval.next_target_dist.is_some() && current_eval.next_target_dist.is_none()
+            || (candidate_eval.next_target_dist.is_some() == current_eval.next_target_dist.is_some()
+                && candidate_eval.next_target_dist.unwrap_or(usize::MAX)
+                    < current_eval.next_target_dist.unwrap_or(usize::MAX))
+            || (candidate_eval.next_target_dist == current_eval.next_target_dist
+                && candidate_eval.next_fallback_dist.is_some()
+                && current_eval.next_fallback_dist.is_none())
+            || (candidate_eval.next_target_dist == current_eval.next_target_dist
+                && candidate_eval.next_fallback_dist.is_some()
+                    == current_eval.next_fallback_dist.is_some()
+                && candidate_eval.next_fallback_dist.unwrap_or(usize::MAX)
+                    < current_eval.next_fallback_dist.unwrap_or(usize::MAX))
+            || (candidate_eval.next_target_dist == current_eval.next_target_dist
+                && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
+                && candidate_eval.reachable_food_count > current_eval.reachable_food_count)
+            || (candidate_eval.next_target_dist == current_eval.next_target_dist
+                && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
+                && candidate_eval.reachable_food_count == current_eval.reachable_food_count
+                && candidate_eval.reachable_cell_count > current_eval.reachable_cell_count)
+            || (candidate_eval.next_target_dist == current_eval.next_target_dist
+                && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
+                && candidate_eval.reachable_food_count == current_eval.reachable_food_count
+                && candidate_eval.reachable_cell_count == current_eval.reachable_cell_count
+                && candidate_eval.prefix_len > current_eval.prefix_len)
+            || (candidate_eval.next_target_dist == current_eval.next_target_dist
+                && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
+                && candidate_eval.reachable_food_count == current_eval.reachable_food_count
+                && candidate_eval.reachable_cell_count == current_eval.reachable_cell_count
+                && candidate_eval.prefix_len == current_eval.prefix_len
+                && candidate_moves_len < current_moves_len)
+    }
+
+    fn evaluate_greedy_target_candidate(&self, state: &SnakeState, moves: &[char]) -> GreedyTargetEval {
         let mut next_state = SnakeState {
             board: state.board.clone(),
             positions: state.positions.clone(),
@@ -680,8 +709,15 @@ impl Solver {
         } else {
             Some(0)
         };
+        let reexpand_bfs = self.bfs_reachable_first_food(&next_state);
 
-        (next_target_dist, next_fallback_dist, self.prefix_len(&next_state))
+        GreedyTargetEval {
+            next_target_dist,
+            next_fallback_dist,
+            reachable_cell_count: reexpand_bfs.reachable_cell_count(),
+            reachable_food_count: reexpand_bfs.reachable_food_count(&next_state),
+            prefix_len: self.prefix_len(&next_state),
+        }
     }
 
     fn plan_greedy_fallback_inner(
@@ -1119,6 +1155,32 @@ impl Solver {
         best
     }
 
+    fn choose_top_foods_of_color(
+        &self,
+        state: &SnakeState,
+        bfs: &BfsResult,
+        target_color: usize,
+        limit: usize,
+    ) -> Vec<FoodTarget> {
+        let mut candidates = Vec::new();
+
+        for i in 0..self.input.n {
+            for j in 0..self.input.n {
+                if state.board[i][j] != target_color {
+                    continue;
+                }
+                let Some(dist) = bfs.distance((i, j)) else {
+                    continue;
+                };
+                candidates.push(FoodTarget { cell: (i, j), dist });
+            }
+        }
+
+        candidates.sort_by_key(|target| (target.dist, target.cell));
+        candidates.truncate(limit);
+        candidates
+    }
+
     fn choose_nearest_food(&self, state: &SnakeState, bfs: &BfsResult) -> Option<FoodTarget> {
         let mut best = None;
 
@@ -1227,6 +1289,25 @@ impl BfsResult {
         }
         moves.reverse();
         Some(moves)
+    }
+
+    fn reachable_cell_count(&self) -> usize {
+        self.reachable
+            .iter()
+            .map(|row| row.iter().filter(|&&cell| cell).count())
+            .sum()
+    }
+
+    fn reachable_food_count(&self, state: &SnakeState) -> usize {
+        let mut count = 0;
+        for i in 0..self.reachable.len() {
+            for j in 0..self.reachable[i].len() {
+                if self.reachable[i][j] && state.board[i][j] != 0 {
+                    count += 1;
+                }
+            }
+        }
+        count
     }
 
     fn dist_debug_text(&self) -> String {

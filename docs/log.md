@@ -465,3 +465,17 @@
 考察:
 - 同じ餌でも経路の違いで次の target / fallback の作りやすさを比較できる入口ができた
 - 今回は GreedyTarget だけの最小実装なので、差分要因は「経路候補の複数化と軽い後評価」に限定される
+変更: GreedyTarget で同色餌の上位 3 候補を列挙し、各 target ごとに探索順の違う BFS から複数経路候補を比較するようにした。候補評価は既存の次 target / fallback の作りやすさに加え、到達可能マス数と到達可能餌数を見て再展開しやすさも少し入れた。
+実行:
+- `cargo check`
+- `cargo build --release`
+- `Get-Content in/0000.txt | .\\target\\release\\ahc063.exe > out/0000.release.txt`
+- `Get-Content in/0003.txt | .\\target\\release\\ahc063.exe > out/0003.release.txt`
+結果:
+- コンパイル成功
+- release 実行で `0000` の score JSON は `100`
+- release 実行で `0003` の score JSON は `521209`
+- stdout は提出形式の操作列のまま、stderr の `result` JSON も維持された
+考察:
+- GreedyTarget が「どの同色餌を取るか」まで比較できるようになり、同じ色でも少し遠い餌を選ぶ余地ができた
+- 今回は GreedyTarget のみ対象なので、改善が出るかどうかは seed 依存で、次は `result.csv` で効いた seed / 悪化した seed を切り分けるのが自然

@@ -14,7 +14,11 @@
 
 ## Greedy改善（E=0を増やす）
 
-[ ] `stop_reason = no_plan` のケースを completed に寄せる小改善を検討する
+[x] `stop_reason = no_plan` のケースを completed に寄せる小改善を検討する
+[x] mainの流れの出力を `debug_ans.txt` に出力する
+[x] BiteRebuild で改善候補が無い場合でも続行用の bite 候補を選べるようにする
+[x] BiteRebuild の last resort 候補評価に到達可能餌数と到達可能マス数を入れる
+[x] `no_plan` を減らせるか release 実行で確認する
 [ ] 盤面都合で少し頭側から切る再修復案を比較する
 [ ] bite 再構成で `E` がどこまで下がるかを評価する
 

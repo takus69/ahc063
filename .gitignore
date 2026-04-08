@@ -8,4 +8,4 @@
 *.exe
 .ipynb_checkpoints
 __pycache__/
-debug.txt
+debug*.txt

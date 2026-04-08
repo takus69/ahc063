@@ -672,3 +672,46 @@
 考察:
 - この TODO は実装済みとみなしてよい
 - 次は `prefix_len` 更新時や `no_plan` 直前の保存条件をどう足すかが自然な次手になる
+変更: `BiteRebuild` の last resort bite 維持タスクを確認した。`plan_bite_rebuild()` には引き続き `best_strict` / `best_relaxed` / `best_any` の 3 段階があり、strict/relaxed が無いときでも last resort の `best_any` が返る構造を維持していたため、今回は solver コードの変更は行わなかった。
+実行:
+- `cargo check`
+- `cargo build --release`
+- `Get-Content in/0000.txt | .\\target\\release\\ahc063.exe > out/0000.release.txt`
+- `Get-Content in/0003.txt | .\\target\\release\\ahc063.exe > out/0003.release.txt`
+- `Import-Csv result.csv | Group-Object stop_reason | ForEach-Object { "{0},{1}" -f $_.Name,$_.Count }`
+結果:
+- コンパイル成功
+- release 実行で `0000` の score JSON は `100`, `stop_reason = "completed"`
+- release 実行で `0003` の score JSON は `456955`, `stop_reason = "safe_branch_full_length"`
+- 最新 `result.csv` の stop reason 集計は `completed=78`, `safe_branch_full_length=73`, `main_full_length_snapshot=47`, `main_prefix_snapshot=2` で、`no_plan` は 0 件だった
+考察:
+- snapshot 保存条件の追加後も、last resort bite による `no_plan` 回避能力は落ちていないとみてよい
+- 今後の主戦場は `no_plan` 維持ではなく、`safe_branch_full_length` の件数や平均 `E` をさらに下げる改善になりそう
+変更: `BiteRebuild` の last resort 候補 `best_any` の評価順を調整し、`current_prefix_len` からの減少量 `prefix_loss` を最優先で比較するようにした。その上で `prefix_len`、到達可能餌数、到達可能マス数、残る長さ、`projected_prefix_len`、move 長の順に見る形へ寄せ、prefix を大きく壊す continuation を今より不利にした。
+実行:
+- `cargo check`
+- `cargo build --release`
+- `Get-Content in/0000.txt | .\\target\\release\\ahc063.exe > out/0000.release.txt`
+- `Get-Content in/0003.txt | .\\target\\release\\ahc063.exe > out/0003.release.txt`
+結果:
+- コンパイル成功
+- release 実行で `0000` の score JSON は `100`, `stop_reason = "completed"`
+- release 実行で `0003` の score JSON は `456955`, `stop_reason = "safe_branch_full_length"`
+- 軽い 2 ケース確認では score 差分は出なかった
+考察:
+- 今回の変更は `best_any` の保守化なので、差分は `no_plan` や snapshot 品質に寄るケース群で出るはず
+- 有効性の判断には 200 ケースで `no_plan`, `main_prefix_snapshot`, `full_length` の差分を見る必要がある
+変更: `BiteRebuild` の last resort 候補 `best_any` の比較に、bite 後に `GreedyTarget` を再開できるか、`GreedyFallback` を再開できるかを追加した。`prefix_loss` を最優先で維持したまま、その直後に `can_resume_target`, `can_resume_fallback` を見て、単に続けるだけでなく次の一手へ戻りやすい continuation を優先するようにした。
+実行:
+- `cargo check`
+- `cargo build --release`
+- `Get-Content in/0000.txt | .\\target\\release\\ahc063.exe > out/0000.release.txt`
+- `Get-Content in/0003.txt | .\\target\\release\\ahc063.exe > out/0003.release.txt`
+結果:
+- コンパイル成功
+- release 実行で `0000` の score JSON は `100`, `stop_reason = "completed"`
+- release 実行で `0003` の score JSON は `456955`, `stop_reason = "safe_branch_full_length"`
+- 軽い 2 ケース確認では score 差分は出なかった
+考察:
+- 今回の変更は `no_plan` 回避後の立て直しやすさを強める調整なので、completed や snapshot 群の差分に出る可能性が高い
+- 有効性の判断には 200 ケースで `no_plan`, `completed`, `main_prefix_snapshot` の差分を見る必要がある

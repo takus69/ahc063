@@ -569,7 +569,7 @@ impl Solver {
         let current_prefix_len = self.prefix_len(state);
         let mut best_strict: Option<(usize, usize, usize, Vec<char>)> = None;
         let mut best_relaxed: Option<(usize, usize, usize, Vec<char>)> = None;
-        let mut best_any: Option<(usize, usize, usize, usize, usize, Vec<char>)> = None;
+        let mut best_any: Option<(usize, bool, bool, usize, usize, usize, usize, usize, Vec<char>)> = None;
 
         for idx in 2..state.positions.len().saturating_sub(1) {
             let Some((moves, bitten)) = self.simulate_bite_candidate(state, idx) else {
@@ -605,18 +605,27 @@ impl Solver {
             {
                 best_relaxed = Some(candidate.clone());
             }
+            let prefix_loss = current_prefix_len.saturating_sub(prefix_len);
+            let can_resume_target = self.plan_greedy_target_inner(&bitten).is_some();
+            let can_resume_fallback = self.plan_greedy_fallback_inner(&bitten).is_some();
             let any_candidate = (
+                prefix_loss,
+                can_resume_target,
+                can_resume_fallback,
+                prefix_len,
                 reexpand_bfs.reachable_food_count(&bitten),
                 reexpand_bfs.reachable_cell_count(),
-                prefix_len,
                 bitten.colors.len(),
                 candidate.0,
                 candidate.3.clone(),
             );
             if best_any.as_ref().is_none_or(|current| {
-                any_candidate.0 > current.0
-                    || (any_candidate.0 == current.0 && any_candidate.1 > current.1)
-                    || (any_candidate.0 == current.0 && any_candidate.1 == current.1 && any_candidate.2 > current.2)
+                any_candidate.0 < current.0
+                    || (any_candidate.0 == current.0 && any_candidate.1 && !current.1)
+                    || (any_candidate.0 == current.0
+                        && any_candidate.1 == current.1
+                        && any_candidate.2
+                        && !current.2)
                     || (any_candidate.0 == current.0
                         && any_candidate.1 == current.1
                         && any_candidate.2 == current.2
@@ -631,7 +640,31 @@ impl Solver {
                         && any_candidate.2 == current.2
                         && any_candidate.3 == current.3
                         && any_candidate.4 == current.4
-                        && any_candidate.5.len() < current.5.len())
+                        && any_candidate.5 > current.5)
+                    || (any_candidate.0 == current.0
+                        && any_candidate.1 == current.1
+                        && any_candidate.2 == current.2
+                        && any_candidate.3 == current.3
+                        && any_candidate.4 == current.4
+                        && any_candidate.5 == current.5
+                        && any_candidate.6 > current.6)
+                    || (any_candidate.0 == current.0
+                        && any_candidate.1 == current.1
+                        && any_candidate.2 == current.2
+                        && any_candidate.3 == current.3
+                        && any_candidate.4 == current.4
+                        && any_candidate.5 == current.5
+                        && any_candidate.6 == current.6
+                        && any_candidate.7 > current.7)
+                    || (any_candidate.0 == current.0
+                        && any_candidate.1 == current.1
+                        && any_candidate.2 == current.2
+                        && any_candidate.3 == current.3
+                        && any_candidate.4 == current.4
+                        && any_candidate.5 == current.5
+                        && any_candidate.6 == current.6
+                        && any_candidate.7 == current.7
+                        && any_candidate.8.len() < current.8.len())
             }) {
                 best_any = Some(any_candidate);
             }
@@ -640,7 +673,7 @@ impl Solver {
         let moves = if let Some((_, _, _, moves)) = best_strict.or(best_relaxed) {
             moves
         } else {
-            let (_, _, _, _, _, moves) = best_any?;
+            let (_, _, _, _, _, _, _, _, moves) = best_any?;
             moves
         };
         Some(Plan {

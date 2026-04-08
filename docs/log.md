@@ -575,3 +575,31 @@
 考察:
 - 今回の変更は `no_plan` の根因に対する小さな緩和であり、効果は `M = k` だがあと少しで詰まるケース群に寄るはず
 - 有効性の判断には 200 ケースで `no_plan` 件数と completed の差分を見る必要がある
+変更: debug ビルド時のみ、最終的に採用された `self.ops` を提出形式そのままで `debug_ans.txt` に出力するようにした。`best snapshot` 採用後に確定した操作列を書き出すので、visualizer から main の最終フローをそのまま追える。
+実行:
+- `cargo check`
+- `Get-Content in/0000.txt | cargo run --quiet > out/0000.main.txt`
+- `Get-Content debug_ans.txt | Select-Object -First 10`
+- `Measure-Object -Line` で `debug_ans.txt` と `out/0000.main.txt` の行数確認
+結果:
+- コンパイル成功
+- `debug_ans.txt` が生成され、先頭 10 行は `R R R D D L U L L U` だった
+- `debug_ans.txt` の行数は `100`、`out/0000.main.txt` の行数も `100` で一致した
+- stderr の `result` JSON と既存の `debug.txt` は維持された
+考察:
+- これで visualizer 側は solver の最終採用解を再利用できる
+- 次は必要なら visualizer 側で `debug_ans.txt` を読んで main の流れを重ね表示する TODO に進める
+変更: BiteRebuild に `best_any` を追加し、strict / relaxed な改善候補が無い場合でも last resort の bite 候補を返せるようにした。評価は bite 後の到達可能餌数、到達可能マス数、`prefix_len`、残る長さ、`projected_prefix_len`、move 長の順で比較する。
+実行:
+- `cargo check`
+- `cargo build --release`
+- `Get-Content in/0000.txt | .\\target\\release\\ahc063.exe > out/0000.release.txt`
+- `Get-Content in/0003.txt | .\\target\\release\\ahc063.exe > out/0003.release.txt`
+結果:
+- コンパイル成功
+- release 実行で `0000` の score JSON は `100`
+- release 実行で `0003` の score JSON は `456955`
+- 軽い 2 ケース確認では score / stop_reason に差分は出なかった
+考察:
+- 今回の変更で、`BiteRebuild` が strict / relaxed 候補ゼロで即 `None` を返す状況は減らせるはず
+- 効果の有無は 200 ケースで `no_plan` 件数と completed の差分を見る必要がある

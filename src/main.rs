@@ -195,6 +195,7 @@ impl Solver {
         self.previous_phase = None;
         self.stop_reason = "unknown";
         self.reset_phase_trace();
+        self.reset_debug_answer();
 
         loop {
             if self.should_stop(&state) {
@@ -255,6 +256,7 @@ impl Solver {
         if let Some(best) = &self.best_snapshot {
             self.ops = best.ops.clone();
         }
+        self.write_debug_answer();
     }
 
     fn ans(&self) {
@@ -540,6 +542,7 @@ impl Solver {
         let current_prefix_len = self.prefix_len(state);
         let mut best_strict: Option<(usize, usize, usize, Vec<char>)> = None;
         let mut best_relaxed: Option<(usize, usize, usize, Vec<char>)> = None;
+        let mut best_any: Option<(usize, usize, usize, usize, usize, Vec<char>)> = None;
 
         for idx in 2..state.positions.len().saturating_sub(1) {
             let Some((moves, bitten)) = self.simulate_bite_candidate(state, idx) else {
@@ -547,6 +550,7 @@ impl Solver {
             };
             let prefix_len = self.prefix_len(&bitten);
             let repaired_prefix_len = self.project_prefix_after_resume(&bitten);
+            let reexpand_bfs = self.bfs_reachable_first_food(&bitten);
             let candidate = (repaired_prefix_len, prefix_len, bitten.colors.len(), moves);
             if prefix_len == bitten.colors.len()
                 && best_strict.as_ref().is_none_or(|current| {
@@ -572,11 +576,46 @@ impl Solver {
                             && candidate.3.len() < current.3.len())
                 })
             {
-                best_relaxed = Some(candidate);
+                best_relaxed = Some(candidate.clone());
+            }
+            let any_candidate = (
+                reexpand_bfs.reachable_food_count(&bitten),
+                reexpand_bfs.reachable_cell_count(),
+                prefix_len,
+                bitten.colors.len(),
+                candidate.0,
+                candidate.3.clone(),
+            );
+            if best_any.as_ref().is_none_or(|current| {
+                any_candidate.0 > current.0
+                    || (any_candidate.0 == current.0 && any_candidate.1 > current.1)
+                    || (any_candidate.0 == current.0 && any_candidate.1 == current.1 && any_candidate.2 > current.2)
+                    || (any_candidate.0 == current.0
+                        && any_candidate.1 == current.1
+                        && any_candidate.2 == current.2
+                        && any_candidate.3 > current.3)
+                    || (any_candidate.0 == current.0
+                        && any_candidate.1 == current.1
+                        && any_candidate.2 == current.2
+                        && any_candidate.3 == current.3
+                        && any_candidate.4 > current.4)
+                    || (any_candidate.0 == current.0
+                        && any_candidate.1 == current.1
+                        && any_candidate.2 == current.2
+                        && any_candidate.3 == current.3
+                        && any_candidate.4 == current.4
+                        && any_candidate.5.len() < current.5.len())
+            }) {
+                best_any = Some(any_candidate);
             }
         }
 
-        let (_, _, _, moves) = best_strict.or(best_relaxed)?;
+        let moves = if let Some((_, _, _, moves)) = best_strict.or(best_relaxed) {
+            moves
+        } else {
+            let (_, _, _, _, _, moves) = best_any?;
+            moves
+        };
         Some(Plan {
             phase: Phase::BiteRebuild,
             moves,
@@ -1016,6 +1055,14 @@ impl Solver {
     fn reset_phase_trace(&self) {}
 
     #[cfg(debug_assertions)]
+    fn reset_debug_answer(&self) {
+        let _ = std::fs::File::create("debug_ans.txt");
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn reset_debug_answer(&self) {}
+
+    #[cfg(debug_assertions)]
     fn write_phase_trace(&self, turn: usize, phase: Phase) {
         if let Ok(mut file) = std::fs::OpenOptions::new()
             .create(true)
@@ -1028,6 +1075,18 @@ impl Solver {
 
     #[cfg(not(debug_assertions))]
     fn write_phase_trace(&self, _turn: usize, _phase: Phase) {}
+
+    #[cfg(debug_assertions)]
+    fn write_debug_answer(&self) {
+        if let Ok(mut file) = std::fs::File::create("debug_ans.txt") {
+            for &op in &self.ops {
+                let _ = writeln!(file, "{op}");
+            }
+        }
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn write_debug_answer(&self) {}
 
     #[cfg(debug_assertions)]
     fn write_bfs_snapshot(

@@ -220,6 +220,9 @@ impl Solver {
                 Phase::BiteRebuild => self.plan_bite_rebuild(&state),
             };
             let Some(plan) = plan else {
+                let mut stats = self.current_output_stats(false);
+                stats.stop_reason = "no_plan_snapshot";
+                self.update_best_snapshot(&self.ops.clone(), stats);
                 self.stop_reason = "no_plan";
                 break;
             };
@@ -238,6 +241,7 @@ impl Solver {
             }
 
             let length_before = state.colors.len();
+            let prefix_before = self.prefix_len(&state);
             self.apply_moves(&mut state, &plan.moves);
             if state.colors.len() < length_before {
                 if plan.phase == Phase::BiteRebuild {
@@ -247,6 +251,25 @@ impl Solver {
                 }
             }
             self.ops.extend(plan.moves.iter().copied());
+            let prefix_after = self.prefix_len(&state);
+            if prefix_after > prefix_before {
+                let mut stats = self.current_output_stats(false);
+                stats.stop_reason = if prefix_after == self.input.m {
+                    "completed"
+                } else {
+                    "main_prefix_snapshot"
+                };
+                self.update_best_snapshot(&self.ops.clone(), stats);
+            }
+            if length_before < self.input.m && state.colors.len() == self.input.m {
+                let mut stats = self.current_output_stats(false);
+                stats.stop_reason = if self.prefix_len(&state) == self.input.m {
+                    "completed"
+                } else {
+                    "main_full_length_snapshot"
+                };
+                self.update_best_snapshot(&self.ops.clone(), stats);
+            }
             self.update_progress(&state, plan.phase, plan.resume_greedy_after_apply);
             self.previous_phase = Some(plan.phase);
         }
@@ -402,6 +425,10 @@ impl Solver {
             .is_none_or(|best| {
                 candidate.score < best.score
                     || (candidate.score == best.score && candidate.ops.len() < best.ops.len())
+                    || (candidate.score == best.score
+                        && candidate.ops.len() == best.ops.len()
+                        && candidate.stats.stop_reason == "completed"
+                        && best.stats.stop_reason != "completed")
             })
         {
             self.best_snapshot = Some(candidate);

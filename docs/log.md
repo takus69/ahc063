@@ -603,3 +603,72 @@
 考察:
 - 今回の変更で、`BiteRebuild` が strict / relaxed 候補ゼロで即 `None` を返す状況は減らせるはず
 - 効果の有無は 200 ケースで `no_plan` 件数と completed の差分を見る必要がある
+変更: SafeCollect bite 起点以外でも best snapshot を保存できるように、main 側で `M = k` に初めて到達したタイミングの操作列を snapshot 保存する条件を追加した。これにより、その後の BiteRebuild や safe 側で悪化しても、早い full length 状態を保険として残せる。あわせて、同点 snapshot 比較では `completed` を優先して stop_reason が不自然に残らないようにした。
+実行:
+- `cargo check`
+- `cargo build --release`
+- `Get-Content in/0000.txt | .\\target\\release\\ahc063.exe > out/0000.release.txt`
+- `Get-Content in/0003.txt | .\\target\\release\\ahc063.exe > out/0003.release.txt`
+結果:
+- コンパイル成功
+- release 実行で `0000` の score JSON は `100`, `stop_reason = "completed"`
+- release 実行で `0003` の score JSON は `456955`, `stop_reason = "safe_branch_full_length"`
+- 軽い 2 ケース確認では score 差分は出なかった
+考察:
+- 今回の変更は main 側の良い full length 状態を取り逃しにくくする入口であり、効果は「後で悪化するケース」や `no_plan` 近辺に寄るはず
+- 有効性の判断には 200 ケースで completed / safe_branch_full_length の差分を見る必要がある
+変更: `prefix_len` 更新時の snapshot 保存タスクに着手する前提でコード確認したところ、直前タスクの確認と同様に、まず `M = k` 到達時保存の仕掛けが既に `solve()` に入っていることを再確認した。今回の TODO そのものではないが、snapshot 保存の追加先は `self.ops.extend(...)` の直後であることを確認した。
+実行:
+- `cargo check`
+- `cargo build --release`
+- `Get-Content in/0000.txt | .\\target\\release\\ahc063.exe > out/0000.release.txt`
+- `Get-Content in/0003.txt | .\\target\\release\\ahc063.exe > out/0003.release.txt`
+結果:
+- 実装済みの `M = k` 到達時保存は `length_before < self.input.m && state.colors.len() == self.input.m` 条件で確認できた
+- release 実行で `0000` の score JSON は `100`, `stop_reason = "completed"`
+- release 実行で `0003` の score JSON は `456955`, `stop_reason = "safe_branch_full_length"`
+考察:
+- snapshot 改善系は `solve()` の `self.ops.extend(...)` 後に小さく足していくのが自然
+- 次の `prefix_len` 更新時保存も同じ位置で最小差分にできる
+変更: `solve()` の move 適用前後で `prefix_len` を比較し、main 側で `prefix_len` が伸びた瞬間に `best_snapshot` 保存を試すようにした。保存には既存の `update_best_snapshot()` をそのまま使い、stop_reason だけ `main_prefix_snapshot` か `completed` に付け替える最小差分にした。
+実行:
+- `cargo check`
+- `cargo build --release`
+- `Get-Content in/0000.txt | .\\target\\release\\ahc063.exe > out/0000.release.txt`
+- `Get-Content in/0003.txt | .\\target\\release\\ahc063.exe > out/0003.release.txt`
+結果:
+- コンパイル成功
+- release 実行で `0000` の score JSON は `100`, `stop_reason = "completed"`
+- release 実行で `0003` の score JSON は `456955`, `stop_reason = "safe_branch_full_length"`
+- 軽い 2 ケース確認では score 差分は出なかった
+考察:
+- 今回の変更は main 側の良い prefix を保険として残す入口であり、後で safe branch や再構成で悪化するケースに効くはず
+- 効果の有無は 200 ケースで completed / safe_branch_full_length / no_plan の差分を見る必要がある
+変更: `plan` が `None` になって `stop_reason = "no_plan"` で止まる直前に、現在の main 状態を `best_snapshot` 候補として保存するようにした。保存条件の良し悪しは既存の `update_best_snapshot()` 比較に任せ、stop_reason だけ `no_plan_snapshot` に付け替える最小差分にした。
+実行:
+- `cargo check`
+- `cargo build --release`
+- `Get-Content in/0000.txt | .\\target\\release\\ahc063.exe > out/0000.release.txt`
+- `Get-Content in/0003.txt | .\\target\\release\\ahc063.exe > out/0003.release.txt`
+結果:
+- コンパイル成功
+- release 実行で `0000` の score JSON は `100`, `stop_reason = "completed"`
+- release 実行で `0003` の score JSON は `456955`, `stop_reason = "safe_branch_full_length"`
+- 軽い 2 ケース確認では score 差分は出なかった
+考察:
+- 今回の変更は `no_plan` 直前の惜しい main 状態を保険として残す入口であり、効果は `no_plan` 群に集中するはず
+- 有効性の判断には 200 ケースで `no_plan` 件数と平均 score の差分を見る必要がある
+変更: `M = k` 到達時の snapshot 保存タスクについて再確認したところ、`solve()` 内ですでに「長さが `M` 未満から `M` に増えた瞬間」に `best_snapshot` 保存を試す実装が入っていた。したがって今回はコード変更は行わず、確認のみを記録する。
+実行:
+- `cargo check`
+- `cargo build --release`
+- `Get-Content in/0000.txt | .\\target\\release\\ahc063.exe > out/0000.release.txt`
+- `Get-Content in/0003.txt | .\\target\\release\\ahc063.exe > out/0003.release.txt`
+結果:
+- 実装箇所は `src/main.rs` の `length_before < self.input.m && state.colors.len() == self.input.m` 条件で確認できた
+- release 実行で `0000` の score JSON は `100`, `stop_reason = "completed"`
+- release 実行で `0003` の score JSON は `456955`, `stop_reason = "safe_branch_full_length"`
+- 軽い 2 ケース確認では追加差分はなし
+考察:
+- この TODO は実装済みとみなしてよい
+- 次は `prefix_len` 更新時や `no_plan` 直前の保存条件をどう足すかが自然な次手になる

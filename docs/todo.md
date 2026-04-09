@@ -1,5 +1,62 @@
 ﻿# todo
 
+## 連続一致 greedy 改善
+
+[x] GreedyTarget の候補評価に「次の 2 手で連続一致できるか」を入れる
+[x] 候補評価で 2 手先の連続一致数を強くボーナスする
+[x] bite 直前に no-bite で連続一致できる候補を再確認する
+[x] 効果があれば 3 手先まで伸ばせるか検討する
+
+## 評価関数ベース化
+
+[ ] GreedyTarget/Fallback の候補評価を 1 つの評価関数に整理する
+[ ] 評価関数に `prefix_len`、次の target/fallback 可否、到達可能餌数、到達可能マス数を入れる
+[ ] 評価関数に 合法手数・出口数 を入れて詰まりやすさを罰する
+[ ] 候補生成と候補評価を分離する
+[ ] greedy では評価関数最大の候補を選ぶ形に整理する
+
+## future-aware greedy
+
+[ ] GreedyTarget/Fallback の候補評価に次の二手の継続可否を入れる
+[ ] bite 直前に no-bite 継続候補を再確認する
+[ ] 残り餌が少ない局面だけ no-bite 完走探索を入れる
+[ ] 候補評価に「胴体が餌密集地を塞ぐか」を入れる
+
+## 将来の探索への接続
+
+[ ] 評価関数を beam search の枝選択に流用できる形にする
+[ ] bite 位置や助走を近傍として hill climbing/SA に流用できる形にする
+[ ] rollout の末端評価に同じ評価関数を使えるようにする
+
+## snapshot 着地の改善
+
+[ ] `main_prefix_snapshot` の seed を特定し、残り餌を取れなかった理由を visualizer で切り分ける
+[ ] `main_prefix_snapshot` が採用される条件を確認し、full-length を崩しにくいように保守化する
+[ ] `main_full_length_snapshot` の代表 seed を確認し、completed に届かない要因を分類する
+[ ] `main_full_length_snapshot` から completed に寄せる小改善を 1 つ検討する
+
+## safe branch / SafeCollect 改善
+
+[ ] `safe_branch_full_length` の代表 seed を確認し、bite 後の continuation と回収経路のどちらが弱いかを切り分ける
+[ ] `safe_branch_full_length` の質改善候補を再整理する
+[ ] safe branch の回収途中で軽い greedy 復帰を試せるようにする
+[ ] safe branch の bite -> zigzag をさらに改善する
+[ ] release 200 ケースで stop_reason の遷移を継続監視する
+
+## snapshot 改善
+
+[x] SafeCollect bite 時以外でも best snapshot を保存する条件を追加する
+[x] `M = k` 到達時に snapshot を保存する
+[x] `prefix_len` 更新時に snapshot を保存する
+[x] `no_plan` 時に良い状態なら snapshot を保存する
+
+## no_plan 改善
+
+[x] `no_plan` を避けるための last resort bite を維持する
+[x] last resort 候補評価で `prefix` 減少を強く罰する
+[x] last resort 候補評価で次の target / fallback 可否を強く見る
+[x] `no_plan` をゼロに近づけられるか release 実行で確認する
+
 ## 停止条件の確認
 
 [x] `result` JSON に `stop_reason` を追加する

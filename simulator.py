@@ -49,6 +49,7 @@ def run_simulate(trial=200):
         'score',
         'k',
         'm',
+        'c',
         'e',
         't',
         'prefix_len',

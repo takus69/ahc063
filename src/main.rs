@@ -198,6 +198,7 @@ impl Solver {
         self.stop_reason = "unknown";
         self.reset_phase_trace();
         self.reset_debug_answer();
+        self.reset_debug_main_answer();
 
         loop {
             if self.should_stop(&state) {
@@ -283,6 +284,7 @@ impl Solver {
         }
 
         let final_ops = self.ops.clone();
+        self.write_debug_main_answer(&final_ops);
         self.update_best_snapshot(&final_ops, self.current_output_stats(false));
         if let Some(best) = &self.best_snapshot {
             self.ops = best.ops.clone();
@@ -303,6 +305,7 @@ impl Solver {
 
     fn result(&self) {
         let state = self.simulate();
+        let c = self.input.c;
         let k = state.colors.len();
         let m = self.input.m;
         let e = state
@@ -322,10 +325,11 @@ impl Solver {
             .unwrap_or_else(|| self.current_output_stats(false));
 
         eprintln!(
-            "{{ \"score\": {}, \"k\": {}, \"m\": {}, \"e\": {}, \"t\": {}, \"prefix_len\": {}, \"remaining_food\": {}, \"completed\": {}, \"full_length\": {}, \"escape_bite_count\": {}, \"rebuild_bite_count\": {}, \"safe_collect_count\": {}, \"forced_safe_collect\": {}, \"used_safe_branch\": {}, \"stop_reason\": \"{}\", \"elapsed_ms\": {} }}",
+            "{{ \"score\": {}, \"k\": {}, \"m\": {}, \"c\": {}, \"e\": {}, \"t\": {}, \"prefix_len\": {}, \"remaining_food\": {}, \"completed\": {}, \"full_length\": {}, \"escape_bite_count\": {}, \"rebuild_bite_count\": {}, \"safe_collect_count\": {}, \"forced_safe_collect\": {}, \"used_safe_branch\": {}, \"stop_reason\": \"{}\", \"elapsed_ms\": {} }}",
             score,
             k,
             m,
+            c,
             e,
             t,
             prefix_len,
@@ -1225,6 +1229,14 @@ impl Solver {
     fn reset_debug_answer(&self) {}
 
     #[cfg(debug_assertions)]
+    fn reset_debug_main_answer(&self) {
+        let _ = std::fs::File::create("debug_main_ans.txt");
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn reset_debug_main_answer(&self) {}
+
+    #[cfg(debug_assertions)]
     fn write_phase_trace(&self, turn: usize, phase: Phase) {
         if let Ok(mut file) = std::fs::OpenOptions::new()
             .create(true)
@@ -1249,6 +1261,18 @@ impl Solver {
 
     #[cfg(not(debug_assertions))]
     fn write_debug_answer(&self) {}
+
+    #[cfg(debug_assertions)]
+    fn write_debug_main_answer(&self, ops: &[char]) {
+        if let Ok(mut file) = std::fs::File::create("debug_main_ans.txt") {
+            for &op in ops {
+                let _ = writeln!(file, "{op}");
+            }
+        }
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn write_debug_main_answer(&self, _ops: &[char]) {}
 
     #[cfg(debug_assertions)]
     fn write_bfs_snapshot(

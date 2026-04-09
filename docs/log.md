@@ -799,3 +799,31 @@
 考察:
 - 今回の変更は構造整理が主目的で、GreedyTarget/Fallback の評価項目を 1 箇所に寄せられた
 - release 再ビルドのロック問題があるため、全体効果の評価は lock が解消した環境で再確認したい
+変更: `result()` の JSON 出力に入力の色数 `C` を `c` として追加した。あわせて `simulator.py` の `columns` にも `c` を追加し、CSV に列として残るようにした。
+実行:
+- `cargo check`
+- `Get-Content in/0000.txt | cargo run --quiet > out/0000.main.txt`
+結果:
+- コンパイル成功
+- `0000` の stderr JSON に `\"c\": 3` が追加されていることを確認
+- 既存の `score`, `k`, `m`, `e`, `t`, `stop_reason` などの key は維持された
+考察:
+- これで今後は `C` ごとの completed 率や stop_reason 分布を result.csv 側で直接見られる
+- solver の挙動自体は一切変えていないので、分析用出力の拡張として安全な変更になっている
+変更: best snapshot 採用前の main 本線の操作列を debug ビルド時のみ `debug_main_ans.txt` に出力するようにした。`debug_ans.txt` は従来どおり最終採用 answer 用として維持し、`solve()` の最後で `final_ops = self.ops.clone()` を取った直後に `write_debug_main_answer(&final_ops)` を呼ぶ形にした。
+実行:
+- `cargo check`
+- `Get-Content in/0000.txt | cargo run --quiet > out/0000.main.txt`
+- `Get-ChildItem -Recurse -Filter debug_main_ans.txt | Select-Object -ExpandProperty FullName`
+- `Get-Content debug_main_ans.txt | Select-Object -First 10`
+- `Get-Content debug_main_ans.txt | Measure-Object -Line`
+- `Get-Content debug_ans.txt | Measure-Object -Line`
+結果:
+- コンパイル成功
+- debug 実行後に `C:\workspaces\AHC\ahc063\debug_main_ans.txt` が生成されることを確認
+- `debug_main_ans.txt` の先頭 10 手は `R R R D D L U L L U`
+- `debug_main_ans.txt` は 104 行、`debug_ans.txt` も 104 行だった
+- 今回の `0000` では main 本線と最終採用 answer が同一だったが、main 本線用の別ファイルが追加された
+考察:
+- これで visualizer 側では `debug_main_ans.txt` を読めば best snapshot 採用前の本線挙動を確認できる
+- `0000` では差分が出なかったので、main と final answer が分かれる seed で確認すると価値が高い

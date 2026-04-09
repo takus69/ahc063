@@ -96,6 +96,7 @@ struct FoodTarget {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct GreedyTargetEval {
+    consecutive_target_hits: usize,
     next_target_dist: Option<usize>,
     next_fallback_dist: Option<usize>,
     reachable_cell_count: usize,
@@ -551,9 +552,11 @@ impl Solver {
                 .or_else(|| self.plan_forced_safe_collect_bite(state))?;
             (moves, false)
         } else {
+            let no_bite_retry = self.plan_pre_bite_no_bite_continuation(state);
             let bite_moves = self.plan_safe_collect_bfs_bite(state);
-            let resume_greedy_after_apply = bite_moves.is_some();
-            let moves = bite_moves
+            let resume_greedy_after_apply = no_bite_retry.is_some() || bite_moves.is_some();
+            let moves = no_bite_retry
+                .or(bite_moves)
                 .or_else(|| self.plan_zigzag_safe_collect_moves(state))
                 .or_else(|| self.plan_greedy_fallback_inner(state).map(|(plan, _, _)| plan.moves))?;
             (moves, resume_greedy_after_apply)
@@ -563,6 +566,27 @@ impl Solver {
             moves,
             resume_greedy_after_apply,
         })
+    }
+
+    fn plan_pre_bite_no_bite_continuation(&self, state: &SnakeState) -> Option<Vec<char>> {
+        if let Some((plan, _, _, _)) = self.plan_greedy_target_inner(state) {
+            let eval = self.evaluate_greedy_target_candidate(state, &plan.moves);
+            if eval.consecutive_target_hits > 0
+                || eval.next_target_dist.is_some()
+                || eval.next_fallback_dist.is_some()
+            {
+                return Some(plan.moves);
+            }
+        }
+
+        if let Some((plan, _, _)) = self.plan_greedy_fallback_inner(state) {
+            let eval = self.evaluate_greedy_fallback_candidate(state, &plan.moves);
+            if eval.0 || eval.2 {
+                return Some(plan.moves);
+            }
+        }
+
+        None
     }
 
     fn plan_bite_rebuild(&self, state: &SnakeState) -> Option<Plan> {
@@ -941,36 +965,73 @@ impl Solver {
         current_eval: GreedyTargetEval,
         current_moves_len: usize,
     ) -> bool {
-        candidate_eval.next_target_dist.is_some() && current_eval.next_target_dist.is_none()
-            || (candidate_eval.next_target_dist.is_some() == current_eval.next_target_dist.is_some()
+        candidate_eval.consecutive_target_hits > current_eval.consecutive_target_hits
+            || (candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
+                && candidate_eval.next_target_dist.is_some()
+                && current_eval.next_target_dist.is_none())
+            || (candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
+                && candidate_eval.next_target_dist.is_some() == current_eval.next_target_dist.is_some()
                 && candidate_eval.next_target_dist.unwrap_or(usize::MAX)
                     < current_eval.next_target_dist.unwrap_or(usize::MAX))
-            || (candidate_eval.next_target_dist == current_eval.next_target_dist
+            || (candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
+                && candidate_eval.next_target_dist == current_eval.next_target_dist
                 && candidate_eval.next_fallback_dist.is_some()
                 && current_eval.next_fallback_dist.is_none())
-            || (candidate_eval.next_target_dist == current_eval.next_target_dist
+            || (candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
+                && candidate_eval.next_target_dist == current_eval.next_target_dist
                 && candidate_eval.next_fallback_dist.is_some()
                     == current_eval.next_fallback_dist.is_some()
                 && candidate_eval.next_fallback_dist.unwrap_or(usize::MAX)
                     < current_eval.next_fallback_dist.unwrap_or(usize::MAX))
-            || (candidate_eval.next_target_dist == current_eval.next_target_dist
+            || (candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
+                && candidate_eval.next_target_dist == current_eval.next_target_dist
                 && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
                 && candidate_eval.reachable_food_count > current_eval.reachable_food_count)
-            || (candidate_eval.next_target_dist == current_eval.next_target_dist
+            || (candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
+                && candidate_eval.next_target_dist == current_eval.next_target_dist
                 && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
                 && candidate_eval.reachable_food_count == current_eval.reachable_food_count
                 && candidate_eval.reachable_cell_count > current_eval.reachable_cell_count)
-            || (candidate_eval.next_target_dist == current_eval.next_target_dist
+            || (candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
+                && candidate_eval.next_target_dist == current_eval.next_target_dist
                 && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
                 && candidate_eval.reachable_food_count == current_eval.reachable_food_count
                 && candidate_eval.reachable_cell_count == current_eval.reachable_cell_count
                 && candidate_eval.prefix_len > current_eval.prefix_len)
-            || (candidate_eval.next_target_dist == current_eval.next_target_dist
+            || (candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
+                && candidate_eval.next_target_dist == current_eval.next_target_dist
                 && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
                 && candidate_eval.reachable_food_count == current_eval.reachable_food_count
                 && candidate_eval.reachable_cell_count == current_eval.reachable_cell_count
                 && candidate_eval.prefix_len == current_eval.prefix_len
                 && candidate_moves_len < current_moves_len)
+    }
+
+    fn count_consecutive_target_hits(&self, state: &SnakeState, limit: usize) -> usize {
+        let mut simulated = SnakeState {
+            board: state.board.clone(),
+            positions: state.positions.clone(),
+            colors: state.colors.clone(),
+        };
+        let mut count = 0;
+
+        while count < limit {
+            if simulated.colors.len() >= self.input.m {
+                return limit;
+            }
+            let target_color = self.input.d[simulated.colors.len()];
+            let bfs = self.bfs_reachable_target_color(&simulated, target_color);
+            let Some(target) = self.choose_nearest_food_of_color(&simulated, &bfs, target_color) else {
+                break;
+            };
+            let Some(moves) = bfs.restore_moves(target.cell) else {
+                break;
+            };
+            self.apply_moves(&mut simulated, &moves);
+            count += 1;
+        }
+
+        count
     }
 
     fn evaluate_greedy_target_candidate(&self, state: &SnakeState, moves: &[char]) -> GreedyTargetEval {
@@ -999,6 +1060,7 @@ impl Solver {
         let reexpand_bfs = self.bfs_reachable_first_food(&next_state);
 
         GreedyTargetEval {
+            consecutive_target_hits: self.count_consecutive_target_hits(&next_state, 2),
             next_target_dist,
             next_fallback_dist,
             reachable_cell_count: reexpand_bfs.reachable_cell_count(),

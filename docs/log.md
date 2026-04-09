@@ -715,3 +715,44 @@
 考察:
 - 今回の変更は `no_plan` 回避後の立て直しやすさを強める調整なので、completed や snapshot 群の差分に出る可能性が高い
 - 有効性の判断には 200 ケースで `no_plan`, `completed`, `main_prefix_snapshot` の差分を見る必要がある
+変更: `GreedyTargetEval` に `consecutive_target_hits` を追加し、候補 `moves` を 1 回適用した後に、さらに次の欲しい色を 2 手連続で no-bite 取得できる数を数えるようにした。`GreedyTarget` の候補比較ではこの値を最優先に見て、その後に次の target/fallback 距離、到達可能餌数、到達可能マス数、`prefix_len`、今回の move 長を比較する形にした。
+実行:
+- `cargo check`
+- `cargo build --release`
+- `Get-Content in/0000.txt | .\\target\\release\\ahc063.exe > out/0000.release.txt`
+- `Get-Content in/0003.txt | .\\target\\release\\ahc063.exe > out/0003.release.txt`
+結果:
+- コンパイル成功
+- release 実行で `0000` の score JSON は `100`, `stop_reason = "completed"`
+- release 実行で `0003` の score JSON は `440196`, `stop_reason = "safe_branch_full_length"` で、前回の `456955` から改善
+考察:
+- `GreedyTarget` の評価に「連続一致できるか」を足す方向は少なくとも一部ケースで有効そう
+- 次は 200 ケースで completed / average `E` / `safe_branch_full_length` の差分を見て、0000 系の no-bite 継続ケースに本当に効いているか確認したい
+変更: `GreedyTarget` の「2 手先の連続一致数を強くボーナスする」タスクを確認した。`is_better_greedy_target_candidate()` ではすでに `consecutive_target_hits` が `next_target_dist` より前、つまり最優先で比較されており、この TODO は現時点のコード上では実装済みと判断した。したがって今回は solver コードの追加変更は行わず、確認のみを記録する。
+実行:
+- `cargo check`
+- `cargo build --release`
+- `Get-Content in/0000.txt | .\\target\\release\\ahc063.exe > out/0000.release.txt`
+- `Get-Content in/0003.txt | .\\target\\release\\ahc063.exe > out/0003.release.txt`
+結果:
+- コンパイル成功
+- release 実行で `0000` の score JSON は `124`, `stop_reason = "completed"`
+- release 実行で `0003` の score JSON は `440196`, `stop_reason = "safe_branch_full_length"`
+- `consecutive_target_hits` は比較順の先頭にあり、2 手先連続一致はすでに最も強いボーナスとして扱われていた
+考察:
+- この TODO の本質は既存実装で満たせている
+- 次に効かせるなら「bite 直前の no-bite 再確認」や「3 手先へ伸ばす」を検討する段階に入っている
+変更: `SafeCollect` の通常分岐で bite に入る直前に、`plan_pre_bite_no_bite_continuation()` を追加した。ここでは `GreedyTarget` をもう一度試し、`consecutive_target_hits > 0` または次の target/fallback に戻れる no-bite 候補があれば、bite より先にその move を採用する。`GreedyTarget` が無ければ `GreedyFallback` を再確認し、次の target/fallback に自然復帰できる候補がある場合だけ採用する。
+実行:
+- `cargo check`
+- `cargo build --release`
+- `Get-Content in/0000.txt | .\\target\\release\\ahc063.exe > out/0000.release.txt`
+- `Get-Content in/0003.txt | .\\target\\release\\ahc063.exe > out/0003.release.txt`
+結果:
+- コンパイル成功
+- release 実行で `0000` の score JSON は `124`, `stop_reason = "completed"`
+- release 実行で `0003` の score JSON は `440196`, `stop_reason = "safe_branch_full_length"`
+- 軽い 2 ケース確認では score 差分は出なかった
+考察:
+- 今回の変更は `safe_collect_active` で SafeCollect に張り付いている場面の bite 直前保険なので、差分はその系統のケース群に出るはず
+- 200 ケースで `safe_branch_full_length`, `main_full_length_snapshot`, `completed` の差分を見る価値が高い

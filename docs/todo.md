@@ -1,5 +1,18 @@
 ﻿# todo
 
+## snapshot 改善
+
+[x] bite を含む plan の適用直前に snapshot 候補を保存する
+[x] `prefix_len` 更新時ではなく score 改善時に snapshot 候補を保存する
+[x] `prefix_len` 保存と score 保存のどちらが良いか release 200 ケースで比較する
+[x] `main_prefix_snapshot` を減らせるか確認する
+
+## 分析
+
+[x] `main_prefix_snapshot` の seed を特定し、残り餌を取れなかった理由を visualizer で切り分ける
+[ ] `main_prefix_snapshot` が採用される条件を確認し、full-length を崩しにくいように保守化する
+[ ] `main_full_length_snapshot` の代表 seed を確認し、completed に届かない要因を分類する
+
 ## 連続一致 greedy 改善
 
 [x] GreedyTarget の候補評価に「次の 2 手で連続一致できるか」を入れる

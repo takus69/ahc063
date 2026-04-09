@@ -96,6 +96,7 @@ struct FoodTarget {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct GreedyTargetEval {
+    consecutive_target_hits_3: usize,
     consecutive_target_hits: usize,
     next_target_dist: Option<usize>,
     next_fallback_dist: Option<usize>,
@@ -965,40 +966,50 @@ impl Solver {
         current_eval: GreedyTargetEval,
         current_moves_len: usize,
     ) -> bool {
-        candidate_eval.consecutive_target_hits > current_eval.consecutive_target_hits
-            || (candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
+        candidate_eval.consecutive_target_hits_3 > current_eval.consecutive_target_hits_3
+            || (candidate_eval.consecutive_target_hits_3 == current_eval.consecutive_target_hits_3
+                && candidate_eval.consecutive_target_hits > current_eval.consecutive_target_hits)
+            || (candidate_eval.consecutive_target_hits_3 == current_eval.consecutive_target_hits_3
+                && candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
                 && candidate_eval.next_target_dist.is_some()
                 && current_eval.next_target_dist.is_none())
-            || (candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
+            || (candidate_eval.consecutive_target_hits_3 == current_eval.consecutive_target_hits_3
+                && candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
                 && candidate_eval.next_target_dist.is_some() == current_eval.next_target_dist.is_some()
                 && candidate_eval.next_target_dist.unwrap_or(usize::MAX)
                     < current_eval.next_target_dist.unwrap_or(usize::MAX))
-            || (candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
+            || (candidate_eval.consecutive_target_hits_3 == current_eval.consecutive_target_hits_3
+                && candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
                 && candidate_eval.next_target_dist == current_eval.next_target_dist
                 && candidate_eval.next_fallback_dist.is_some()
                 && current_eval.next_fallback_dist.is_none())
-            || (candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
+            || (candidate_eval.consecutive_target_hits_3 == current_eval.consecutive_target_hits_3
+                && candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
                 && candidate_eval.next_target_dist == current_eval.next_target_dist
                 && candidate_eval.next_fallback_dist.is_some()
                     == current_eval.next_fallback_dist.is_some()
                 && candidate_eval.next_fallback_dist.unwrap_or(usize::MAX)
                     < current_eval.next_fallback_dist.unwrap_or(usize::MAX))
-            || (candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
+            || (candidate_eval.consecutive_target_hits_3 == current_eval.consecutive_target_hits_3
+                && candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
                 && candidate_eval.next_target_dist == current_eval.next_target_dist
                 && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
                 && candidate_eval.reachable_food_count > current_eval.reachable_food_count)
-            || (candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
+            || (candidate_eval.consecutive_target_hits_3 == current_eval.consecutive_target_hits_3
+                && candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
                 && candidate_eval.next_target_dist == current_eval.next_target_dist
                 && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
                 && candidate_eval.reachable_food_count == current_eval.reachable_food_count
                 && candidate_eval.reachable_cell_count > current_eval.reachable_cell_count)
-            || (candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
+            || (candidate_eval.consecutive_target_hits_3 == current_eval.consecutive_target_hits_3
+                && candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
                 && candidate_eval.next_target_dist == current_eval.next_target_dist
                 && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
                 && candidate_eval.reachable_food_count == current_eval.reachable_food_count
                 && candidate_eval.reachable_cell_count == current_eval.reachable_cell_count
                 && candidate_eval.prefix_len > current_eval.prefix_len)
-            || (candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
+            || (candidate_eval.consecutive_target_hits_3 == current_eval.consecutive_target_hits_3
+                && candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
                 && candidate_eval.next_target_dist == current_eval.next_target_dist
                 && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
                 && candidate_eval.reachable_food_count == current_eval.reachable_food_count
@@ -1041,6 +1052,7 @@ impl Solver {
             colors: state.colors.clone(),
         };
         self.apply_moves(&mut next_state, moves);
+        let consecutive_target_hits_3 = self.count_consecutive_target_hits(&next_state, 3);
 
         let next_target_dist = if next_state.colors.len() < self.input.m {
             let next_target_color = self.input.d[next_state.colors.len()];
@@ -1060,7 +1072,8 @@ impl Solver {
         let reexpand_bfs = self.bfs_reachable_first_food(&next_state);
 
         GreedyTargetEval {
-            consecutive_target_hits: self.count_consecutive_target_hits(&next_state, 2),
+            consecutive_target_hits_3,
+            consecutive_target_hits: consecutive_target_hits_3.min(2),
             next_target_dist,
             next_fallback_dist,
             reachable_cell_count: reexpand_bfs.reachable_cell_count(),

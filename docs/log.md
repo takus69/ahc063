@@ -756,3 +756,19 @@
 考察:
 - 今回の変更は `safe_collect_active` で SafeCollect に張り付いている場面の bite 直前保険なので、差分はその系統のケース群に出るはず
 - 200 ケースで `safe_branch_full_length`, `main_full_length_snapshot`, `completed` の差分を見る価値が高い
+変更: `GreedyTargetEval` に `consecutive_target_hits_3` を追加し、候補 `moves` を 1 回適用した後に、さらに次の欲しい色を 3 手先まで no-bite で連続一致できる数を数えるようにした。既存の 2 手先情報は `min(2, consecutive_target_hits_3)` として維持し、候補比較では `3手先連続一致 -> 2手先連続一致 -> 既存評価` の順にした。
+実行:
+- `cargo check`
+- `cargo build --release`
+- `Get-Content in/0000.txt | .\\target\\release\\ahc063.exe > out/0000.release.txt`
+- `Get-Content in/0003.txt | .\\target\\release\\ahc063.exe > out/0003.release.txt`
+- `python simulator.py` を試したが `python` コマンドが存在しなかった
+- `py simulator.py` を試したが `py` コマンドも存在しなかった
+結果:
+- コンパイル成功
+- release 実行で `0000` の score JSON は `124`, `stop_reason = "completed"`
+- release 実行で `0003` の score JSON は `440196`, `stop_reason = "safe_branch_full_length"`
+- この環境では Python ランチャが無く、`simulator.py` による 200 ケース確認は実施できなかった
+考察:
+- 3 手先評価を入れても `0000` / `0003` では少なくとも悪化は見られなかった
+- 有効性の判断には 200 ケース再集計が必要で、これは Python 実行環境のある手元で確認したい

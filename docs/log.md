@@ -772,3 +772,30 @@
 考察:
 - 3 手先評価を入れても `0000` / `0003` では少なくとも悪化は見られなかった
 - 有効性の判断には 200 ケース再集計が必要で、これは Python 実行環境のある手元で確認したい
+変更: `solve()` で選ばれた `plan` が実際に bite を含むかを `plan_contains_bite()` で判定し、bite を含む plan を適用する直前に現在の main 状態を `pre_bite_snapshot` として `best_snapshot` 候補へ保存するようにした。判定は state clone に対して move を 1 手ずつ `apply_move()` し、どこかで長さが減ったら bite 含みとみなす最小実装にした。
+実行:
+- `cargo check`
+- `cargo build --release`
+- `Get-Content in/0000.txt | .\\target\\release\\ahc063.exe > out/0000.release.txt`
+- `Get-Content in/0003.txt | .\\target\\release\\ahc063.exe > out/0003.release.txt`
+結果:
+- コンパイル成功
+- release 実行で `0000` の score JSON は `104`, `stop_reason = "completed"` で、前回の `124` から改善
+- release 実行で `0003` の score JSON は `398199`, `stop_reason = "safe_branch_full_length"` で、前回の `440196` から改善
+考察:
+- bite 前の main 状態を保険として残す追加は少なくとも軽い 2 ケースで有効だった
+- 特に bite 後に悪化しやすいケースを snapshot で救えている可能性が高く、`main_prefix_snapshot` や full-length 崩れの抑制にも効く可能性がある
+変更: `GreedyTarget` / `GreedyFallback` の候補評価を共通 `GreedyEval` と `is_better_greedy_candidate()` に整理した。共通化の対象は `next_target_dist`, `next_fallback_dist`, `prefix_len`, `reachable_food_count`, `reachable_cell_count`, `consecutive_target_hits`, `consecutive_target_hits_3` で、`build_greedy_eval()` から各 phase 用評価を作る形にした。比較順は phase ごとに分岐させており、振る舞いは極力そのまま維持した。
+実行:
+- `cargo check`
+- `cargo build --release` を試したが `target\\release\\ahc063.exe` のロックで `os error 5` となった
+- `Get-Content in/0000.txt | .\\target\\release\\ahc063.exe > out/0000.release.txt`
+- `Get-Content in/0003.txt | .\\target\\release\\ahc063.exe > out/0003.release.txt`
+結果:
+- `cargo check` 成功
+- `cargo build --release` は exe ロックで再ビルドできなかった
+- release 実行で `0000` の score JSON は `104`, `stop_reason = "completed"`
+- release 実行で `0003` の score JSON は `290720`, `stop_reason = "pre_bite_snapshot"`
+考察:
+- 今回の変更は構造整理が主目的で、GreedyTarget/Fallback の評価項目を 1 箇所に寄せられた
+- release 再ビルドのロック問題があるため、全体効果の評価は lock が解消した環境で再確認したい

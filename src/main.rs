@@ -95,7 +95,7 @@ struct FoodTarget {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct GreedyTargetEval {
+struct GreedyEval {
     consecutive_target_hits_3: usize,
     consecutive_target_hits: usize,
     next_target_dist: Option<usize>,
@@ -240,6 +240,12 @@ impl Solver {
 
             if plan.phase == Phase::SafeCollect && self.previous_phase != Some(Phase::SafeCollect) {
                 self.safe_collect_count += 1;
+            }
+
+            if self.plan_contains_bite(&state, &plan.moves) {
+                let mut stats = self.current_output_stats(false);
+                stats.stop_reason = "pre_bite_snapshot";
+                self.update_best_snapshot(&self.ops.clone(), stats);
             }
 
             let length_before = state.colors.len();
@@ -582,7 +588,7 @@ impl Solver {
 
         if let Some((plan, _, _)) = self.plan_greedy_fallback_inner(state) {
             let eval = self.evaluate_greedy_fallback_candidate(state, &plan.moves);
-            if eval.0 || eval.2 {
+            if eval.next_target_dist.is_some() || eval.next_fallback_dist.is_some() {
                 return Some(plan.moves);
             }
         }
@@ -712,6 +718,24 @@ impl Solver {
         for &op in moves {
             self.apply_move(state, op);
         }
+    }
+
+    fn plan_contains_bite(&self, state: &SnakeState, moves: &[char]) -> bool {
+        let mut simulated = SnakeState {
+            board: state.board.clone(),
+            positions: state.positions.clone(),
+            colors: state.colors.clone(),
+        };
+
+        for &op in moves {
+            let len_before = simulated.colors.len();
+            self.apply_move(&mut simulated, op);
+            if simulated.colors.len() < len_before {
+                return true;
+            }
+        }
+
+        false
     }
 
     fn plan_safe_collect_bfs_bite(&self, state: &SnakeState) -> Option<Vec<char>> {
@@ -915,7 +939,7 @@ impl Solver {
             self.bfs_reachable_target_color_with_order(state, target_color, &TARGET_BFS_ORDERS[0]);
         let targets =
             self.choose_top_foods_of_color(state, &primary_bfs, target_color, GREEDY_TARGET_CANDIDATE_LIMIT);
-        let mut best: Option<(GreedyTargetEval, usize, Plan, BfsResult, FoodTarget)> = None;
+        let mut best: Option<(GreedyEval, usize, Plan, BfsResult, FoodTarget)> = None;
 
         for target in targets {
             let mut seen_moves = Vec::new();
@@ -943,7 +967,8 @@ impl Solver {
                 );
 
                 if best.as_ref().is_none_or(|current| {
-                    self.is_better_greedy_target_candidate(
+                    self.is_better_greedy_candidate(
+                        Phase::GreedyTarget,
                         candidate.0,
                         candidate.1,
                         current.0,
@@ -959,63 +984,90 @@ impl Solver {
         Some((plan, bfs, target, target_color))
     }
 
-    fn is_better_greedy_target_candidate(
+    fn is_better_greedy_candidate(
         &self,
-        candidate_eval: GreedyTargetEval,
+        phase: Phase,
+        candidate_eval: GreedyEval,
         candidate_moves_len: usize,
-        current_eval: GreedyTargetEval,
+        current_eval: GreedyEval,
         current_moves_len: usize,
     ) -> bool {
-        candidate_eval.consecutive_target_hits_3 > current_eval.consecutive_target_hits_3
-            || (candidate_eval.consecutive_target_hits_3 == current_eval.consecutive_target_hits_3
-                && candidate_eval.consecutive_target_hits > current_eval.consecutive_target_hits)
-            || (candidate_eval.consecutive_target_hits_3 == current_eval.consecutive_target_hits_3
-                && candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
-                && candidate_eval.next_target_dist.is_some()
-                && current_eval.next_target_dist.is_none())
-            || (candidate_eval.consecutive_target_hits_3 == current_eval.consecutive_target_hits_3
-                && candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
-                && candidate_eval.next_target_dist.is_some() == current_eval.next_target_dist.is_some()
-                && candidate_eval.next_target_dist.unwrap_or(usize::MAX)
-                    < current_eval.next_target_dist.unwrap_or(usize::MAX))
-            || (candidate_eval.consecutive_target_hits_3 == current_eval.consecutive_target_hits_3
-                && candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
-                && candidate_eval.next_target_dist == current_eval.next_target_dist
-                && candidate_eval.next_fallback_dist.is_some()
-                && current_eval.next_fallback_dist.is_none())
-            || (candidate_eval.consecutive_target_hits_3 == current_eval.consecutive_target_hits_3
-                && candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
-                && candidate_eval.next_target_dist == current_eval.next_target_dist
-                && candidate_eval.next_fallback_dist.is_some()
-                    == current_eval.next_fallback_dist.is_some()
-                && candidate_eval.next_fallback_dist.unwrap_or(usize::MAX)
-                    < current_eval.next_fallback_dist.unwrap_or(usize::MAX))
-            || (candidate_eval.consecutive_target_hits_3 == current_eval.consecutive_target_hits_3
-                && candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
-                && candidate_eval.next_target_dist == current_eval.next_target_dist
-                && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
-                && candidate_eval.reachable_food_count > current_eval.reachable_food_count)
-            || (candidate_eval.consecutive_target_hits_3 == current_eval.consecutive_target_hits_3
-                && candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
-                && candidate_eval.next_target_dist == current_eval.next_target_dist
-                && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
-                && candidate_eval.reachable_food_count == current_eval.reachable_food_count
-                && candidate_eval.reachable_cell_count > current_eval.reachable_cell_count)
-            || (candidate_eval.consecutive_target_hits_3 == current_eval.consecutive_target_hits_3
-                && candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
-                && candidate_eval.next_target_dist == current_eval.next_target_dist
-                && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
-                && candidate_eval.reachable_food_count == current_eval.reachable_food_count
-                && candidate_eval.reachable_cell_count == current_eval.reachable_cell_count
-                && candidate_eval.prefix_len > current_eval.prefix_len)
-            || (candidate_eval.consecutive_target_hits_3 == current_eval.consecutive_target_hits_3
-                && candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
-                && candidate_eval.next_target_dist == current_eval.next_target_dist
-                && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
-                && candidate_eval.reachable_food_count == current_eval.reachable_food_count
-                && candidate_eval.reachable_cell_count == current_eval.reachable_cell_count
-                && candidate_eval.prefix_len == current_eval.prefix_len
-                && candidate_moves_len < current_moves_len)
+        match phase {
+            Phase::GreedyTarget => {
+                candidate_eval.consecutive_target_hits_3 > current_eval.consecutive_target_hits_3
+                    || (candidate_eval.consecutive_target_hits_3 == current_eval.consecutive_target_hits_3
+                        && candidate_eval.consecutive_target_hits > current_eval.consecutive_target_hits)
+                    || (candidate_eval.consecutive_target_hits_3 == current_eval.consecutive_target_hits_3
+                        && candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
+                        && candidate_eval.next_target_dist.is_some()
+                        && current_eval.next_target_dist.is_none())
+                    || (candidate_eval.consecutive_target_hits_3 == current_eval.consecutive_target_hits_3
+                        && candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
+                        && candidate_eval.next_target_dist.is_some() == current_eval.next_target_dist.is_some()
+                        && candidate_eval.next_target_dist.unwrap_or(usize::MAX)
+                            < current_eval.next_target_dist.unwrap_or(usize::MAX))
+                    || (candidate_eval.consecutive_target_hits_3 == current_eval.consecutive_target_hits_3
+                        && candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
+                        && candidate_eval.next_target_dist == current_eval.next_target_dist
+                        && candidate_eval.next_fallback_dist.is_some()
+                        && current_eval.next_fallback_dist.is_none())
+                    || (candidate_eval.consecutive_target_hits_3 == current_eval.consecutive_target_hits_3
+                        && candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
+                        && candidate_eval.next_target_dist == current_eval.next_target_dist
+                        && candidate_eval.next_fallback_dist.is_some()
+                            == current_eval.next_fallback_dist.is_some()
+                        && candidate_eval.next_fallback_dist.unwrap_or(usize::MAX)
+                            < current_eval.next_fallback_dist.unwrap_or(usize::MAX))
+                    || (candidate_eval.consecutive_target_hits_3 == current_eval.consecutive_target_hits_3
+                        && candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
+                        && candidate_eval.next_target_dist == current_eval.next_target_dist
+                        && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
+                        && candidate_eval.reachable_food_count > current_eval.reachable_food_count)
+                    || (candidate_eval.consecutive_target_hits_3 == current_eval.consecutive_target_hits_3
+                        && candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
+                        && candidate_eval.next_target_dist == current_eval.next_target_dist
+                        && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
+                        && candidate_eval.reachable_food_count == current_eval.reachable_food_count
+                        && candidate_eval.reachable_cell_count > current_eval.reachable_cell_count)
+                    || (candidate_eval.consecutive_target_hits_3 == current_eval.consecutive_target_hits_3
+                        && candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
+                        && candidate_eval.next_target_dist == current_eval.next_target_dist
+                        && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
+                        && candidate_eval.reachable_food_count == current_eval.reachable_food_count
+                        && candidate_eval.reachable_cell_count == current_eval.reachable_cell_count
+                        && candidate_eval.prefix_len > current_eval.prefix_len)
+                    || (candidate_eval.consecutive_target_hits_3 == current_eval.consecutive_target_hits_3
+                        && candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
+                        && candidate_eval.next_target_dist == current_eval.next_target_dist
+                        && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
+                        && candidate_eval.reachable_food_count == current_eval.reachable_food_count
+                        && candidate_eval.reachable_cell_count == current_eval.reachable_cell_count
+                        && candidate_eval.prefix_len == current_eval.prefix_len
+                        && candidate_moves_len < current_moves_len)
+            }
+            Phase::GreedyFallback => {
+                candidate_eval.next_target_dist.is_some() && current_eval.next_target_dist.is_none()
+                    || (candidate_eval.next_target_dist.is_some() == current_eval.next_target_dist.is_some()
+                        && candidate_eval.next_target_dist.unwrap_or(usize::MAX)
+                            < current_eval.next_target_dist.unwrap_or(usize::MAX))
+                    || (candidate_eval.next_target_dist == current_eval.next_target_dist
+                        && candidate_eval.next_fallback_dist.is_some()
+                        && current_eval.next_fallback_dist.is_none())
+                    || (candidate_eval.next_target_dist == current_eval.next_target_dist
+                        && candidate_eval.next_fallback_dist.is_some()
+                            == current_eval.next_fallback_dist.is_some()
+                        && candidate_eval.next_fallback_dist.unwrap_or(usize::MAX)
+                            < current_eval.next_fallback_dist.unwrap_or(usize::MAX))
+                    || (candidate_eval.next_target_dist == current_eval.next_target_dist
+                        && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
+                        && candidate_eval.prefix_len > current_eval.prefix_len)
+                    || (candidate_eval.next_target_dist == current_eval.next_target_dist
+                        && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
+                        && candidate_eval.prefix_len == current_eval.prefix_len
+                        && candidate_moves_len < current_moves_len)
+            }
+            _ => false,
+        }
     }
 
     fn count_consecutive_target_hits(&self, state: &SnakeState, limit: usize) -> usize {
@@ -1045,41 +1097,48 @@ impl Solver {
         count
     }
 
-    fn evaluate_greedy_target_candidate(&self, state: &SnakeState, moves: &[char]) -> GreedyTargetEval {
+    fn build_greedy_eval(&self, next_state: &SnakeState, include_target_continuity: bool) -> GreedyEval {
+        let consecutive_target_hits_3 = if include_target_continuity {
+            self.count_consecutive_target_hits(next_state, 3)
+        } else {
+            0
+        };
+        let next_target_dist = if next_state.colors.len() < self.input.m {
+            let next_target_color = self.input.d[next_state.colors.len()];
+            let next_bfs = self.bfs_reachable_target_color(next_state, next_target_color);
+            self.choose_nearest_food_of_color(next_state, &next_bfs, next_target_color)
+                .map(|target| target.dist)
+        } else {
+            Some(0)
+        };
+        let next_fallback_dist = if next_state.colors.len() < self.input.m {
+            let next_bfs = self.bfs_reachable_first_food(next_state);
+            self.choose_nearest_food(next_state, &next_bfs)
+                .map(|target| target.dist)
+        } else {
+            Some(0)
+        };
+        let reexpand_bfs = self.bfs_reachable_first_food(next_state);
+
+        GreedyEval {
+            consecutive_target_hits_3,
+            consecutive_target_hits: consecutive_target_hits_3.min(2),
+            next_target_dist,
+            next_fallback_dist,
+            reachable_cell_count: reexpand_bfs.reachable_cell_count(),
+            reachable_food_count: reexpand_bfs.reachable_food_count(next_state),
+            prefix_len: self.prefix_len(next_state),
+        }
+    }
+
+    fn evaluate_greedy_target_candidate(&self, state: &SnakeState, moves: &[char]) -> GreedyEval {
         let mut next_state = SnakeState {
             board: state.board.clone(),
             positions: state.positions.clone(),
             colors: state.colors.clone(),
         };
         self.apply_moves(&mut next_state, moves);
-        let consecutive_target_hits_3 = self.count_consecutive_target_hits(&next_state, 3);
-
-        let next_target_dist = if next_state.colors.len() < self.input.m {
-            let next_target_color = self.input.d[next_state.colors.len()];
-            let next_bfs = self.bfs_reachable_target_color(&next_state, next_target_color);
-            self.choose_nearest_food_of_color(&next_state, &next_bfs, next_target_color)
-                .map(|target| target.dist)
-        } else {
-            Some(0)
-        };
-        let next_fallback_dist = if next_state.colors.len() < self.input.m {
-            let next_bfs = self.bfs_reachable_first_food(&next_state);
-            self.choose_nearest_food(&next_state, &next_bfs)
-                .map(|target| target.dist)
-        } else {
-            Some(0)
-        };
-        let reexpand_bfs = self.bfs_reachable_first_food(&next_state);
-
-        GreedyTargetEval {
-            consecutive_target_hits_3,
-            consecutive_target_hits: consecutive_target_hits_3.min(2),
-            next_target_dist,
-            next_fallback_dist,
-            reachable_cell_count: reexpand_bfs.reachable_cell_count(),
-            reachable_food_count: reexpand_bfs.reachable_food_count(&next_state),
-            prefix_len: self.prefix_len(&next_state),
-        }
+        self.build_greedy_eval(&next_state, true)
     }
 
     fn plan_greedy_fallback_inner(
@@ -1089,7 +1148,7 @@ impl Solver {
         let primary_bfs = self.bfs_reachable_first_food_with_order(state, &TARGET_BFS_ORDERS[0]);
         let targets =
             self.choose_top_foods(state, &primary_bfs, GREEDY_FALLBACK_CANDIDATE_LIMIT);
-        let mut best: Option<((bool, usize, bool, usize, usize), usize, Plan, BfsResult, FoodTarget)> =
+        let mut best: Option<(GreedyEval, usize, Plan, BfsResult, FoodTarget)> =
             None;
 
         for target in targets {
@@ -1118,22 +1177,13 @@ impl Solver {
                 );
 
                 if best.as_ref().is_none_or(|current| {
-                    candidate.0 .0 && !current.0 .0
-                        || (candidate.0 .0 == current.0 .0 && candidate.0 .1 < current.0 .1)
-                        || (candidate.0 .0 == current.0 .0
-                            && candidate.0 .1 == current.0 .1
-                            && candidate.0 .2
-                            && !current.0 .2)
-                        || (candidate.0 .0 == current.0 .0
-                            && candidate.0 .1 == current.0 .1
-                            && candidate.0 .2 == current.0 .2
-                            && candidate.0 .3 < current.0 .3)
-                        || (candidate.0 .0 == current.0 .0
-                            && candidate.0 .1 == current.0 .1
-                            && candidate.0 .2 == current.0 .2
-                            && candidate.0 .3 == current.0 .3
-                            && candidate.0 .4 > current.0 .4)
-                        || (candidate.0 == current.0 && candidate.1 < current.1)
+                    self.is_better_greedy_candidate(
+                        Phase::GreedyFallback,
+                        candidate.0,
+                        candidate.1,
+                        current.0,
+                        current.1,
+                    )
                 }) {
                     best = Some(candidate);
                 }
@@ -1148,37 +1198,14 @@ impl Solver {
         &self,
         state: &SnakeState,
         moves: &[char],
-    ) -> (bool, usize, bool, usize, usize) {
+    ) -> GreedyEval {
         let mut next_state = SnakeState {
             board: state.board.clone(),
             positions: state.positions.clone(),
             colors: state.colors.clone(),
         };
         self.apply_moves(&mut next_state, moves);
-
-        let next_target_dist = if next_state.colors.len() < self.input.m {
-            let next_target_color = self.input.d[next_state.colors.len()];
-            let next_bfs = self.bfs_reachable_target_color(&next_state, next_target_color);
-            self.choose_nearest_food_of_color(&next_state, &next_bfs, next_target_color)
-                .map(|target| target.dist)
-        } else {
-            Some(0)
-        };
-        let next_fallback_dist = if next_state.colors.len() < self.input.m {
-            let next_bfs = self.bfs_reachable_first_food(&next_state);
-            self.choose_nearest_food(&next_state, &next_bfs)
-                .map(|target| target.dist)
-        } else {
-            Some(0)
-        };
-
-        (
-            next_target_dist.is_some(),
-            next_target_dist.unwrap_or(usize::MAX),
-            next_fallback_dist.is_some(),
-            next_fallback_dist.unwrap_or(usize::MAX),
-            self.prefix_len(&next_state),
-        )
+        self.build_greedy_eval(&next_state, false)
     }
 
     #[cfg(debug_assertions)]

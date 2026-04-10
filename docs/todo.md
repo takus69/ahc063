@@ -2,27 +2,18 @@
 
 ## 最優先
 
-[x] 候補評価で距離・手数の重要性を上げる
-[x] bite 後 continuation 比較で、Greedy と食べ直しを同じ捕食個数 horizon で比較する
-[x] bite 候補評価に食べ直し可能性を入れる
-[x] bite 候補評価に食べ直しまでの追加手数を入れる
-[ ] GreedyTarget/Fallback の長い plan を一定手数ごとに再評価する
+[ ] `main_full_length_snapshot` の代表 seed を確認し、completed に届かない要因を分類する
+[ ] `main_full_length_snapshot` から completed に寄せる小改善を 1 つ検討する
+[ ] `pre_bite_snapshot` の代表 seed を確認し、completed に届かない要因を分類する
+[ ] `pre_bite_snapshot` から completed に寄せる小改善を 1 つ検討する
+[ ] `main_prefix_snapshot` が採用される条件を確認し、full-length を崩しにくいように保守化する
+[ ] snapshot の保存・採用バランスを調整する
 
-## 上記に付随する改善
+## 候補評価の改善
 
-[ ] 一定手数ごとの再評価で同じ経路に戻りすぎないよう、BFS 候補生成に seed 固定の多様性を入れる
-[ ] BFS 候補は初手 4 方向を必ずカバーし、残り順序は seed 固定乱択にする
 [ ] 候補評価で「同じ状態に回復可能なら短い経路を優先する」を入れる
 [ ] 候補評価で詰まりやすさや出口の少なさを罰する
 [ ] 候補評価に胴体が餌密集地を塞ぐかを入れる
-
-## snapshot / 着地品質の改善
-
-[ ] `main_prefix_snapshot` の seed を特定し、残り餌を取れなかった理由を visualizer で切り分ける
-[ ] `main_prefix_snapshot` が採用される条件を確認し、full-length を崩しにくいように保守化する
-[ ] `main_full_length_snapshot` の代表 seed を確認し、completed に届かない要因を分類する
-[ ] `main_full_length_snapshot` から completed に寄せる小改善を 1 つ検討する
-[ ] snapshot の保存・採用バランスを調整する
 
 ## safe branch / SafeCollect 改善
 
@@ -32,27 +23,30 @@
 [ ] safe branch の bite -> zigzag をさらに改善する
 [ ] release 200 ケースで stop_reason の遷移を継続監視する
 
+## 長い plan / 候補生成
+
+[ ] BFS 候補生成に seed 固定の多様性を入れる
+[ ] BFS 候補は初手 4 方向を必ずカバーし、残り順序は seed 固定乱択にする
+
 ## bite 再構成
 
 [ ] 盤面都合で少し頭側から切る再修復案を比較する
 [ ] bite 再構成で `E` がどこまで下がるかを評価する
-
-## 評価関数ベース化 / 将来の探索
-
-[ ] GreedyTarget/Fallback の候補評価を 1 つの評価関数に整理する
-[ ] 評価関数に `prefix_len`、次の target/fallback 可否、到達可能餌数、到達可能マス数を入れる
-[ ] 候補生成と候補評価を分離する
-[ ] greedy では評価関数最大の候補を選ぶ形に整理する
-[ ] 評価関数を beam search の枝選択に流用できる形にする
-[ ] bite 位置や助走を近傍として hill climbing/SA に流用できる形にする
-[ ] rollout の末端評価に同じ評価関数を使えるようにする
-
 
 ## E=0 後のスコア改善
 
 [ ] 残り餌が少ない局面だけ no-bite 完走探索を入れる
 [ ] completed 近傍で不要な bite を避ける tie-break を入れる
 [ ] completed ケースの `T` を下げる endgame 評価を入れる
+
+## 将来の探索への接続
+
+[ ] 評価関数に `prefix_len`、次の target/fallback 可否、到達可能餌数、到達可能マス数を入れる
+[ ] 候補生成と候補評価を分離する
+[ ] greedy では評価関数最大の候補を選ぶ形に整理する
+[ ] 評価関数を beam search の枝選択に流用できる形にする
+[ ] bite 位置や助走を近傍として hill climbing/SA に流用できる形にする
+[ ] rollout の末端評価に同じ評価関数を使えるようにする
 
 ## snapshot 改善
 

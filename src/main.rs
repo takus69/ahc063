@@ -20,6 +20,8 @@ const RESTART_REBUILD_REGROW_HORIZON: usize = 6;
 const PRE_BITE_NO_BITE_HORIZON: usize = 6;
 const PRE_BITE_NO_BITE_RECHECK_REMAINING_FOOD_LIMIT: usize = 16;
 const GREEDY_PROJECT_HORIZON: usize = 4;
+const RESTART_BITE_FOR_TARGET_HEAD_CANDIDATE_LIMIT: usize = 6;
+const RESTART_BITE_FOR_TARGET_TARGET_HORIZON: usize = 3;
 const BITE_CONTINUATION_HORIZON: usize = 2;
 const TARGET_BFS_ORDERS: [[char; 4]; 4] = [
     ['U', 'D', 'L', 'R'],
@@ -116,6 +118,17 @@ struct GreedyEval {
     reachable_cell_count: usize,
     reachable_food_count: usize,
     prefix_len: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RestartBiteForTargetEval {
+    projected_prefix_len: usize,
+    projected_final_length: usize,
+    matched_target_hits: usize,
+    next_target_dist: Option<usize>,
+    reachable_cell_count: usize,
+    reachable_food_count: usize,
+    total_moves_len: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -617,6 +630,10 @@ impl Solver {
     }
 
     fn plan_greedy_fallback(&self, state: &SnakeState) -> Option<Plan> {
+        if let Some(plan) = self.plan_restart_bite_for_target(state) {
+            return Some(plan);
+        }
+
         let (plan, bfs, target) = self.plan_greedy_fallback_inner(state)?;
         self.write_bfs_snapshot(
             self.ops.len(),
@@ -627,6 +644,183 @@ impl Solver {
         );
         Some(plan)
     }
+
+    fn plan_restart_bite_for_target(&self, state: &SnakeState) -> Option<Plan> {
+        if state.colors.len() >= self.input.m {
+            return None;
+        }
+        if self.plan_greedy_target_inner(state).is_some() {
+            return None;
+        }
+
+        let current_prefix_len = self.prefix_len(state);
+        let want = self.input.d[state.colors.len()];
+        let mut best: Option<(RestartBiteForTargetEval, Vec<char>)> = None;
+
+        for idx in self.collect_restart_bite_target_candidate_indices(state, current_prefix_len) {
+            let Some((bite_moves, bitten, dropped_suffix)) =
+                self.simulate_bite_candidate_with_dropped_suffix(state, idx)
+            else {
+                continue;
+            };
+            if bitten.colors.len() > current_prefix_len {
+                continue;
+            }
+            let rebuild_need = current_prefix_len.saturating_sub(bitten.colors.len());
+            if rebuild_need > dropped_suffix.len() {
+                continue;
+            }
+            let Some((rebuilt_state, rebuild_moves)) =
+                self.rebuild_prefix_suffix(bitten, &dropped_suffix, rebuild_need)
+            else {
+                continue;
+            };
+            if rebuilt_state.colors.len() != current_prefix_len {
+                continue;
+            }
+            if self.prefix_len(&rebuilt_state) != current_prefix_len {
+                continue;
+            }
+
+            let (projected_state, rollout_moves, matched_target_hits) =
+                self.rollout_target_only_prefix_extension(
+                    &rebuilt_state,
+                    RESTART_BITE_FOR_TARGET_TARGET_HORIZON,
+                );
+
+            let projected_prefix_len = self.prefix_len(&projected_state);
+            if projected_prefix_len <= current_prefix_len {
+                continue;
+            }
+            if projected_state.colors.len() <= current_prefix_len {
+                continue;
+            }
+            if projected_state.colors[current_prefix_len] != want {
+                continue;
+            }
+
+            let next_target_dist = if projected_state.colors.len() < self.input.m {
+                let next_want = self.input.d[projected_state.colors.len()];
+                let bfs = self.bfs_reachable_target_color(&projected_state, next_want);
+                self.choose_nearest_food_of_color(&projected_state, &bfs, next_want)
+                    .map(|target| target.dist)
+            } else {
+                Some(0)
+            };
+            let reexpand_bfs = self.bfs_reachable_first_food(&projected_state);
+
+            let total_moves_len = bite_moves.len() + rebuild_moves.len() + rollout_moves.len();
+            let eval = RestartBiteForTargetEval {
+                projected_prefix_len,
+                projected_final_length: projected_state.colors.len(),
+                matched_target_hits,
+                next_target_dist,
+                reachable_cell_count: reexpand_bfs.reachable_cell_count(),
+                reachable_food_count: reexpand_bfs.reachable_food_count(&projected_state),
+                total_moves_len,
+            };
+
+            let mut moves = bite_moves;
+            moves.extend(rebuild_moves);
+            moves.extend(rollout_moves);
+
+            if best.as_ref().is_none_or(|current| {
+                self.is_better_restart_bite_for_target_candidate(eval, &moves, current.0, &current.1)
+            }) {
+                best = Some((eval, moves));
+            }
+        }
+
+        let (_, moves) = best?;
+        Some(Plan {
+            phase: Phase::GreedyFallback,
+            moves,
+            resume_greedy_after_apply: false,
+        })
+    }
+
+    fn collect_restart_bite_target_candidate_indices(
+        &self,
+        state: &SnakeState,
+        current_prefix_len: usize,
+    ) -> Vec<usize> {
+        let len = state.positions.len();
+        if len < 4 {
+            return Vec::new();
+        }
+        let min_idx = 2usize;
+        let max_idx = len.saturating_sub(2);
+        if min_idx > max_idx {
+            return Vec::new();
+        }
+
+        let mut used = vec![false; len];
+        let mut indices = Vec::new();
+
+        for idx in min_idx..=(max_idx.min(RESTART_BITE_FOR_TARGET_HEAD_CANDIDATE_LIMIT)) {
+            if !used[idx] {
+                used[idx] = true;
+                indices.push(idx);
+            }
+        }
+
+        let around_start = current_prefix_len.saturating_sub(2).max(min_idx);
+        let around_end = (current_prefix_len + 2).min(max_idx);
+        for idx in around_start..=around_end {
+            if !used[idx] {
+                used[idx] = true;
+                indices.push(idx);
+            }
+        }
+
+        indices.sort_unstable();
+        indices
+    }
+
+    fn is_better_restart_bite_for_target_candidate(
+        &self,
+        candidate_eval: RestartBiteForTargetEval,
+        candidate_moves: &[char],
+        current_eval: RestartBiteForTargetEval,
+        current_moves: &[char],
+    ) -> bool {
+        candidate_eval.projected_prefix_len > current_eval.projected_prefix_len
+            || (candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
+                && candidate_eval.matched_target_hits > current_eval.matched_target_hits)
+            || (candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
+                && candidate_eval.matched_target_hits == current_eval.matched_target_hits
+                && candidate_eval.next_target_dist.is_some()
+                && current_eval.next_target_dist.is_none())
+            || (candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
+                && candidate_eval.matched_target_hits == current_eval.matched_target_hits
+                && candidate_eval.next_target_dist.is_some() == current_eval.next_target_dist.is_some()
+                && candidate_eval.next_target_dist.unwrap_or(usize::MAX)
+                    < current_eval.next_target_dist.unwrap_or(usize::MAX))
+            || (candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
+                && candidate_eval.matched_target_hits == current_eval.matched_target_hits
+                && candidate_eval.next_target_dist == current_eval.next_target_dist
+                && candidate_eval.projected_final_length > current_eval.projected_final_length)
+            || (candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
+                && candidate_eval.matched_target_hits == current_eval.matched_target_hits
+                && candidate_eval.next_target_dist == current_eval.next_target_dist
+                && candidate_eval.projected_final_length == current_eval.projected_final_length
+                && candidate_eval.reachable_food_count > current_eval.reachable_food_count)
+            || (candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
+                && candidate_eval.matched_target_hits == current_eval.matched_target_hits
+                && candidate_eval.next_target_dist == current_eval.next_target_dist
+                && candidate_eval.projected_final_length == current_eval.projected_final_length
+                && candidate_eval.reachable_food_count == current_eval.reachable_food_count
+                && candidate_eval.reachable_cell_count > current_eval.reachable_cell_count)
+            || (candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
+                && candidate_eval.matched_target_hits == current_eval.matched_target_hits
+                && candidate_eval.next_target_dist == current_eval.next_target_dist
+                && candidate_eval.projected_final_length == current_eval.projected_final_length
+                && candidate_eval.reachable_food_count == current_eval.reachable_food_count
+                && candidate_eval.reachable_cell_count == current_eval.reachable_cell_count
+                && candidate_eval.total_moves_len < current_eval.total_moves_len)
+            || (candidate_eval == current_eval && candidate_moves.len() < current_moves.len())
+    }
+
 
     fn plan_safe_collect(&self, state: &SnakeState) -> Option<Plan> {
         let (moves, resume_greedy_after_apply) = if self.force_safe_collect_mode {

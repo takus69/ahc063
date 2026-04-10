@@ -133,6 +133,28 @@ struct SafeCollectRouteEval {
     reachable_food_count: usize,
 }
 
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ExitEval {
+    can_reach_want: bool,
+    dist_to_want: Option<usize>,
+    reachable_cell_count: usize,
+    reachable_food_count: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TargetedRepairEval {
+    target_prefix_len: usize,
+    bitten_length: usize,
+    kept_prefix_exact: bool,
+    can_reach_want: bool,
+    dist_to_want: Option<usize>,
+    best_exit_can_reach_want: bool,
+    best_exit_dist_to_want: Option<usize>,
+    best_exit_reachable_cell_count: usize,
+    best_exit_reachable_food_count: usize,
+}
+
 #[derive(Clone, Debug)]
 struct BiteContinuationOutcome {
     state: SnakeState,
@@ -616,6 +638,11 @@ impl Solver {
     }
 
     fn plan_bite_rebuild(&self, state: &SnakeState) -> Option<Plan> {
+        self.plan_targeted_suffix_repair(state)
+            .or_else(|| self.plan_bite_rebuild_fallback(state))
+    }
+
+    fn plan_bite_rebuild_fallback(&self, state: &SnakeState) -> Option<Plan> {
         let current_prefix_len = self.prefix_len(state);
         let mut best_strict: Option<(usize, usize, usize, Vec<char>)> = None;
         let mut best_relaxed: Option<(usize, usize, usize, Vec<char>)> = None;
@@ -731,6 +758,199 @@ impl Solver {
             moves,
             resume_greedy_after_apply: false,
         })
+    }
+
+    fn plan_targeted_suffix_repair(&self, state: &SnakeState) -> Option<Plan> {
+        if state.colors.len() != self.input.m {
+            return None;
+        }
+        let p = self.prefix_len(state);
+        if p >= self.input.m {
+            return None;
+        }
+
+        let mut target_lengths = Vec::new();
+        target_lengths.push(p);
+        if p > 5 {
+            target_lengths.push(p - 1);
+        }
+        if p > 6 {
+            target_lengths.push(p - 2);
+        }
+
+        let mut best: Option<(TargetedRepairEval, usize, Vec<char>)> = None;
+        for &target_prefix_len in &target_lengths {
+            for idx in 2..state.positions.len().saturating_sub(1) {
+                let Some((moves, bitten, _)) =
+                    self.simulate_bite_candidate_with_dropped_suffix(state, idx)
+                else {
+                    continue;
+                };
+                if bitten.colors.len() < 5 || bitten.colors.len() > target_prefix_len {
+                    continue;
+                }
+                let eval = self.evaluate_targeted_repair_candidate(&bitten, target_prefix_len);
+                let candidate = (eval, moves.len(), moves);
+                if best.as_ref().is_none_or(|current| {
+                    self.is_better_targeted_repair_candidate(
+                        candidate.0,
+                        candidate.1,
+                        current.0,
+                        current.1,
+                    )
+                }) {
+                    best = Some(candidate);
+                }
+            }
+            if let Some((eval, _, _)) = best {
+                if eval.target_prefix_len == target_prefix_len && eval.can_reach_want {
+                    break;
+                }
+            }
+        }
+
+        let (_, _, moves) = best?;
+        Some(Plan {
+            phase: Phase::BiteRebuild,
+            moves,
+            resume_greedy_after_apply: false,
+        })
+    }
+
+    fn evaluate_targeted_repair_candidate(
+        &self,
+        bitten: &SnakeState,
+        target_prefix_len: usize,
+    ) -> TargetedRepairEval {
+        let kept_prefix_exact = bitten.colors.len() == target_prefix_len
+            && self.prefix_len(bitten) == target_prefix_len;
+        let want = self.input.d[target_prefix_len];
+        let bfs = self.bfs_reachable_target_color(bitten, want);
+        let dist_to_want = self
+            .choose_nearest_food_of_color(bitten, &bfs, want)
+            .map(|target| target.dist);
+        let exit_eval = self.best_exit_eval_after_bite(bitten, want);
+
+        TargetedRepairEval {
+            target_prefix_len,
+            bitten_length: bitten.colors.len(),
+            kept_prefix_exact,
+            can_reach_want: dist_to_want.is_some(),
+            dist_to_want,
+            best_exit_can_reach_want: exit_eval.can_reach_want,
+            best_exit_dist_to_want: exit_eval.dist_to_want,
+            best_exit_reachable_cell_count: exit_eval.reachable_cell_count,
+            best_exit_reachable_food_count: exit_eval.reachable_food_count,
+        }
+    }
+
+    fn best_exit_eval_after_bite(&self, bitten: &SnakeState, want: usize) -> ExitEval {
+        let mut best: Option<ExitEval> = None;
+
+        for &op in &TARGET_BFS_ORDERS[0] {
+            let Some(next) = self.try_advance(bitten.positions[0], op) else {
+                continue;
+            };
+            if bitten.positions.iter().skip(1).any(|&pos| pos == next) {
+                continue;
+            }
+            let mut next_state = SnakeState {
+                board: bitten.board.clone(),
+                positions: bitten.positions.clone(),
+                colors: bitten.colors.clone(),
+            };
+            let len_before = next_state.colors.len();
+            self.apply_move(&mut next_state, op);
+            if next_state.colors.len() < len_before {
+                continue;
+            }
+
+            let target_bfs = self.bfs_reachable_target_color(&next_state, want);
+            let dist_to_want = self
+                .choose_nearest_food_of_color(&next_state, &target_bfs, want)
+                .map(|target| target.dist);
+            let reexpand_bfs = self.bfs_reachable_first_food(&next_state);
+            let candidate = ExitEval {
+                can_reach_want: dist_to_want.is_some(),
+                dist_to_want,
+                reachable_cell_count: reexpand_bfs.reachable_cell_count(),
+                reachable_food_count: reexpand_bfs.reachable_food_count(&next_state),
+            };
+            if best.as_ref().is_none_or(|current| {
+                self.is_better_exit_eval(candidate, *current)
+            }) {
+                best = Some(candidate);
+            }
+        }
+
+        best.unwrap_or(ExitEval {
+            can_reach_want: false,
+            dist_to_want: None,
+            reachable_cell_count: 0,
+            reachable_food_count: 0,
+        })
+    }
+
+    fn is_better_exit_eval(&self, candidate: ExitEval, current: ExitEval) -> bool {
+        candidate.can_reach_want && !current.can_reach_want
+            || (candidate.can_reach_want == current.can_reach_want
+                && candidate.dist_to_want.unwrap_or(usize::MAX)
+                    < current.dist_to_want.unwrap_or(usize::MAX))
+            || (candidate.can_reach_want == current.can_reach_want
+                && candidate.dist_to_want == current.dist_to_want
+                && candidate.reachable_cell_count > current.reachable_cell_count)
+            || (candidate.can_reach_want == current.can_reach_want
+                && candidate.dist_to_want == current.dist_to_want
+                && candidate.reachable_cell_count == current.reachable_cell_count
+                && candidate.reachable_food_count > current.reachable_food_count)
+    }
+
+    fn is_better_targeted_repair_candidate(
+        &self,
+        candidate_eval: TargetedRepairEval,
+        candidate_moves_len: usize,
+        current_eval: TargetedRepairEval,
+        current_moves_len: usize,
+    ) -> bool {
+        candidate_eval.kept_prefix_exact && !current_eval.kept_prefix_exact
+            || (candidate_eval.kept_prefix_exact == current_eval.kept_prefix_exact
+                && candidate_eval.can_reach_want
+                && !current_eval.can_reach_want)
+            || (candidate_eval.kept_prefix_exact == current_eval.kept_prefix_exact
+                && candidate_eval.can_reach_want == current_eval.can_reach_want
+                && candidate_eval.dist_to_want.unwrap_or(usize::MAX)
+                    < current_eval.dist_to_want.unwrap_or(usize::MAX))
+            || (candidate_eval.kept_prefix_exact == current_eval.kept_prefix_exact
+                && candidate_eval.can_reach_want == current_eval.can_reach_want
+                && candidate_eval.dist_to_want == current_eval.dist_to_want
+                && candidate_eval.best_exit_can_reach_want
+                && !current_eval.best_exit_can_reach_want)
+            || (candidate_eval.kept_prefix_exact == current_eval.kept_prefix_exact
+                && candidate_eval.can_reach_want == current_eval.can_reach_want
+                && candidate_eval.dist_to_want == current_eval.dist_to_want
+                && candidate_eval.best_exit_can_reach_want
+                    == current_eval.best_exit_can_reach_want
+                && candidate_eval.best_exit_dist_to_want.unwrap_or(usize::MAX)
+                    < current_eval.best_exit_dist_to_want.unwrap_or(usize::MAX))
+            || (candidate_eval.kept_prefix_exact == current_eval.kept_prefix_exact
+                && candidate_eval.can_reach_want == current_eval.can_reach_want
+                && candidate_eval.dist_to_want == current_eval.dist_to_want
+                && candidate_eval.best_exit_can_reach_want
+                    == current_eval.best_exit_can_reach_want
+                && candidate_eval.best_exit_dist_to_want == current_eval.best_exit_dist_to_want
+                && candidate_eval.best_exit_reachable_cell_count
+                    > current_eval.best_exit_reachable_cell_count)
+            || (candidate_eval.kept_prefix_exact == current_eval.kept_prefix_exact
+                && candidate_eval.can_reach_want == current_eval.can_reach_want
+                && candidate_eval.dist_to_want == current_eval.dist_to_want
+                && candidate_eval.best_exit_can_reach_want
+                    == current_eval.best_exit_can_reach_want
+                && candidate_eval.best_exit_dist_to_want == current_eval.best_exit_dist_to_want
+                && candidate_eval.best_exit_reachable_cell_count
+                    == current_eval.best_exit_reachable_cell_count
+                && candidate_eval.best_exit_reachable_food_count
+                    > current_eval.best_exit_reachable_food_count)
+            || (candidate_eval == current_eval && candidate_moves_len < current_moves_len)
     }
 
     fn apply_moves(&self, state: &mut SnakeState, moves: &[char]) {

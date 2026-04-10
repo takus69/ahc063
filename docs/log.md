@@ -866,3 +866,52 @@
 考察:
 - 今回の panic は continuation 評価まわりから `M = k` 状態で GreedyTarget に入れてしまう境界条件バグだった
 - 早期 `None` で十分防げており、通常ケースの `0000` も release 実行で据え置きだった
+変更: `GreedyTarget` / `GreedyFallback` の評価には全長 plan を使ったまま、実行時だけ先頭 `4` 手で打ち切って再計画するようにした。`truncate_plan_moves()` を追加し、Greedy 系 plan の `apply_moves`、`ops` 追加、`pre_bite_snapshot` 判定を chunk 後の move 列に揃えた。
+実行:
+- `cargo check`
+- `cargo build --release`
+- `Get-Content in/0000.txt | .\\target\\release\\ahc063.exe > out/0000.release.txt`
+- `Get-Content in/0003.txt | .\\target\\release\\ahc063.exe > out/0003.release.txt`
+- `Get-Content in/0056.txt | .\\target\\release\\ahc063.exe > out/0056.release.txt`
+結果:
+- コンパイル成功
+- release 実行で `0000` の score JSON は `104`, `stop_reason = "completed"` で据え置き
+- release 実行で `0003` の score JSON は `155274`, `stop_reason = "pre_bite_snapshot"` で改善
+- release 実行で `0056` の score JSON は `26128`, `stop_reason = "main_full_length_snapshot"`
+- この環境では `python` / `py` が無く、`simulator.py` による 200 ケース確認は未実施
+考察:
+- 長い Greedy plan へのコミットを弱める入口としては自然で、少なくとも軽いケースでは悪化は見られなかった
+- chunk サイズ `4` の妥当性は 200 ケース集計で completed / full_length / snapshot 遷移を見て判断したい
+変更: Greedy の chunk 再計画で元の長い plan を捨てないよう、`pending_greedy_plan` を保持するようにした。GreedyTarget / GreedyFallback のみ、再計画時に「残り plan」と「新しい same-phase plan」を既存の Greedy 比較ロジックで比べ、良い方だけに乗り換えるようにした。
+実行:
+- `cargo check`
+- `cargo build --release`
+- `Get-Content in/0000.txt | .\\target\\release\\ahc063.exe > out/0000.release.txt`
+- `Get-Content in/0003.txt | .\\target\\release\\ahc063.exe > out/0003.release.txt`
+- `Get-Content in/0056.txt | .\\target\\release\\ahc063.exe > out/0056.release.txt`
+結果:
+- コンパイル成功
+- release 実行で `0000` の score JSON は `126`, `stop_reason = "completed"`
+- release 実行で `0003` の score JSON は `177044`, `stop_reason = "main_full_length_snapshot"`
+- release 実行で `0056` の score JSON は `3205`, `stop_reason = "completed"`
+- この環境では `python` / `py` が無く、`simulator.py` による 200 ケース確認は未実施
+考察:
+- 元 plan を baseline として保持する方向は `0056` のようなケースでは効いている可能性がある
+- 一方で `0000` / `0003` は悪化しており、same-phase 比較だけでは baseline 固定が強すぎる可能性がある
+- 全体評価には 200 ケース再集計が必要だが、少なくとも比較条件の追加調整余地はある
+変更: 固定 `TARGET_BFS_ORDERS` をやめ、初手 4 方向を必ずカバーしたうえで残り 3 方向だけを seed 固定で並べ替える `build_target_bfs_orders()` を追加した。GreedyTarget / GreedyFallback と、default の target/fallback BFS はこの決定的な順序列を使うようにした。
+実行:
+- `cargo check`
+- `cargo build --release`
+- `Get-Content in/0000.txt | .\\target\\release\\ahc063.exe > out/0000.release.txt`
+- `Get-Content in/0003.txt | .\\target\\release\\ahc063.exe > out/0003.release.txt`
+- `Get-Content in/0056.txt | .\\target\\release\\ahc063.exe > out/0056.release.txt`
+結果:
+- コンパイル成功
+- release 実行で `0000` の score JSON は `126`, `stop_reason = "completed"` で据え置き
+- release 実行で `0003` の score JSON は `337458`, `stop_reason = "pre_bite_snapshot"` で悪化
+- release 実行で `0056` の score JSON は `20788`, `stop_reason = "main_full_length_snapshot"`
+- この環境では `python` / `py` が無く、`simulator.py` による 200 ケース確認は未実施
+考察:
+- seed 固定の多様性自体は入ったが、軽い確認では改善方向が安定していない
+- chunk 再計画と組み合わせたときの相性はまだ不透明で、200 ケース再集計や visualizer での tail-chasing seed 確認が必要

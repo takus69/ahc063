@@ -1,7 +1,6 @@
 ﻿use proconio::input;
 use std::time::Instant;
 use std::collections::VecDeque;
-use rand::{rngs::StdRng, SeedableRng};
 #[cfg(debug_assertions)]
 use std::io::Write;
 
@@ -13,12 +12,8 @@ const SAFE_BRANCH_MIN_SAFE_COLLECT_COUNT: usize = 2;
 const GREEDY_TARGET_CANDIDATE_LIMIT: usize = 3;
 const GREEDY_FALLBACK_CANDIDATE_LIMIT: usize = 3;
 const BITE_CONTINUATION_HORIZON: usize = 2;
-const TARGET_BFS_ORDERS: [[char; 4]; 4] = [
-    ['U', 'D', 'L', 'R'],
-    ['R', 'D', 'L', 'U'],
-    ['L', 'U', 'R', 'D'],
-    ['D', 'R', 'U', 'L'],
-];
+const GREEDY_REPLAN_STEP_LIMIT: usize = 4;
+const BFS_DIRECTIONS: [char; 4] = ['U', 'D', 'L', 'R'];
 
 fn read_input() -> Input {
     input! {
@@ -42,10 +37,11 @@ struct Input {
 }
 
 struct Solver {
-    rng: StdRng,
+    seed: u64,
     start: Instant,
     input: Input,
     ops: Vec<char>,
+    pending_greedy_plan: Option<Plan>,
     best_snapshot: Option<OutputSnapshot>,
     last_progress: Option<ProgressSnapshot>,
     safe_collect_active: bool,
@@ -180,13 +176,12 @@ struct ProgressSnapshot {
 
 impl Solver {
     fn new(seed: u64, start: Instant, input: Input) -> Self {
-        let rng = StdRng::seed_from_u64(seed);
-
         Self {
-            rng,
+            seed,
             start,
             input,
             ops: Vec::new(),
+            pending_greedy_plan: None,
             best_snapshot: None,
             last_progress: None,
             safe_collect_active: false,
@@ -201,6 +196,7 @@ impl Solver {
 
     fn solve(&mut self) {
         self.ops.clear();
+        self.pending_greedy_plan = None;
         self.best_snapshot = None;
         let mut state = self.initial_state();
         self.last_progress = None;
@@ -229,15 +225,29 @@ impl Solver {
                 break;
             }
 
-            let phase = self.choose_phase(&state);
-            self.write_phase_trace(self.ops.len(), phase);
-            let plan = match phase {
-                Phase::GreedyTarget => self.plan_greedy_target(&state),
-                Phase::GreedyFallback => self.plan_greedy_fallback(&state),
-                Phase::SafeCollect => self.plan_safe_collect(&state),
-                Phase::BiteRebuild => self.plan_bite_rebuild(&state),
+            let plan = if state.colors.len() < self.input.m
+                && !self.force_safe_collect_mode
+                && !self.safe_collect_active
+            {
+                self.choose_greedy_plan_with_baseline(&state)
+            } else {
+                None
             };
+            let (phase, plan) = if let Some(plan) = plan {
+                (plan.phase, Some(plan))
+            } else {
+                let phase = self.choose_phase(&state);
+                let plan = match phase {
+                    Phase::GreedyTarget => self.plan_greedy_target(&state),
+                    Phase::GreedyFallback => self.plan_greedy_fallback(&state),
+                    Phase::SafeCollect => self.plan_safe_collect(&state),
+                    Phase::BiteRebuild => self.plan_bite_rebuild(&state),
+                };
+                (phase, plan)
+            };
+            self.write_phase_trace(self.ops.len(), phase);
             let Some(plan) = plan else {
+                self.pending_greedy_plan = None;
                 let mut stats = self.current_output_stats(false);
                 stats.stop_reason = "no_plan_snapshot";
                 self.update_best_snapshot(&self.ops.clone(), stats);
@@ -258,7 +268,8 @@ impl Solver {
                 self.safe_collect_count += 1;
             }
 
-            if self.plan_contains_bite(&state, &plan.moves) {
+            let applied_moves = self.truncate_plan_moves(&plan);
+            if self.plan_contains_bite(&state, &applied_moves) {
                 let mut stats = self.current_output_stats(false);
                 stats.stop_reason = "pre_bite_snapshot";
                 self.update_best_snapshot(&self.ops.clone(), stats);
@@ -266,7 +277,7 @@ impl Solver {
 
             let length_before = state.colors.len();
             let prefix_before = self.prefix_len(&state);
-            self.apply_moves(&mut state, &plan.moves);
+            self.apply_moves(&mut state, &applied_moves);
             if state.colors.len() < length_before {
                 if plan.phase == Phase::BiteRebuild {
                     self.rebuild_bite_count += 1;
@@ -274,7 +285,8 @@ impl Solver {
                     self.escape_bite_count += 1;
                 }
             }
-            self.ops.extend(plan.moves.iter().copied());
+            self.ops.extend(applied_moves.iter().copied());
+            self.update_pending_greedy_plan(&plan, applied_moves.len());
             let prefix_after = self.prefix_len(&state);
             if prefix_after > prefix_before {
                 let mut stats = self.current_output_stats(false);
@@ -305,6 +317,89 @@ impl Solver {
             self.ops = best.ops.clone();
         }
         self.write_debug_answer();
+    }
+
+    fn truncate_plan_moves(&self, plan: &Plan) -> Vec<char> {
+        match plan.phase {
+            Phase::GreedyTarget | Phase::GreedyFallback => plan
+                .moves
+                .iter()
+                .take(GREEDY_REPLAN_STEP_LIMIT)
+                .copied()
+                .collect(),
+            _ => plan.moves.clone(),
+        }
+    }
+
+    fn update_pending_greedy_plan(&mut self, plan: &Plan, consumed_len: usize) {
+        match plan.phase {
+            Phase::GreedyTarget | Phase::GreedyFallback => {
+                if consumed_len < plan.moves.len() {
+                    self.pending_greedy_plan = Some(Plan {
+                        phase: plan.phase,
+                        moves: plan.moves[consumed_len..].to_vec(),
+                        resume_greedy_after_apply: false,
+                    });
+                } else {
+                    self.pending_greedy_plan = None;
+                }
+            }
+            _ => {
+                self.pending_greedy_plan = None;
+            }
+        }
+    }
+
+    fn choose_greedy_plan_with_baseline(&self, state: &SnakeState) -> Option<Plan> {
+        let pending = self.pending_greedy_plan.as_ref().filter(|plan| !plan.moves.is_empty());
+        match pending.map(|plan| plan.phase) {
+            Some(Phase::GreedyTarget) => {
+                let baseline = self.evaluate_greedy_target_candidate(state, &pending?.moves);
+                let fresh = self.plan_greedy_target_inner(state).map(|(plan, _, _, _)| {
+                    let eval = self.evaluate_greedy_target_candidate(state, &plan.moves);
+                    (plan, eval)
+                });
+                match fresh {
+                    Some((plan, eval))
+                        if self.is_better_greedy_candidate(
+                            Phase::GreedyTarget,
+                            eval,
+                            plan.moves.len(),
+                            baseline,
+                            pending?.moves.len(),
+                        ) =>
+                    {
+                        Some(plan)
+                    }
+                    _ => Some(pending?.clone()),
+                }
+            }
+            Some(Phase::GreedyFallback) => {
+                let baseline = self.evaluate_greedy_fallback_candidate(state, &pending?.moves);
+                let fresh = self.plan_greedy_fallback_inner(state).map(|(plan, _, _)| {
+                    let eval = self.evaluate_greedy_fallback_candidate(state, &plan.moves);
+                    (plan, eval)
+                });
+                match fresh {
+                    Some((plan, eval))
+                        if self.is_better_greedy_candidate(
+                            Phase::GreedyFallback,
+                            eval,
+                            plan.moves.len(),
+                            baseline,
+                            pending?.moves.len(),
+                        ) =>
+                    {
+                        Some(plan)
+                    }
+                    _ => Some(pending?.clone()),
+                }
+            }
+            _ => self
+                .plan_greedy_target_inner(state)
+                .map(|(plan, _, _, _)| plan)
+                .or_else(|| self.plan_greedy_fallback_inner(state).map(|(plan, _, _)| plan)),
+        }
     }
 
     fn ans(&self) {
@@ -1126,6 +1221,41 @@ impl Solver {
         self.prefix_len(&resumed)
     }
 
+    fn build_target_bfs_orders(&self, state: &SnakeState) -> [[char; 4]; 4] {
+        let head = state.positions[0];
+        let base = self.seed
+            ^ ((head.0 as u64) << 48)
+            ^ ((head.1 as u64) << 40)
+            ^ ((state.colors.len() as u64) << 24)
+            ^ ((self.prefix_len(state) as u64) << 8)
+            ^ (self.ops.len() as u64);
+        let mut orders = [['U'; 4]; 4];
+
+        for (idx, &first) in BFS_DIRECTIONS.iter().enumerate() {
+            let mut rest = BFS_DIRECTIONS
+                .iter()
+                .copied()
+                .filter(|&dir| dir != first)
+                .collect::<Vec<_>>();
+            rest.sort_by_key(|&dir| self.bfs_order_key(base, first, dir));
+            orders[idx][0] = first;
+            orders[idx][1] = rest[0];
+            orders[idx][2] = rest[1];
+            orders[idx][3] = rest[2];
+        }
+
+        orders
+    }
+
+    fn bfs_order_key(&self, base: u64, first: char, dir: char) -> u64 {
+        let mut x = base ^ ((first as u64) << 8) ^ (dir as u64);
+        x ^= x >> 30;
+        x = x.wrapping_mul(0xbf58476d1ce4e5b9);
+        x ^= x >> 27;
+        x = x.wrapping_mul(0x94d049bb133111eb);
+        x ^ (x >> 31)
+    }
+
     fn should_force_safe_collect(&self) -> bool {
         self.start.elapsed().as_millis() >= SAFE_COLLECT_TIME_LIMIT_MS
             || self.ops.len() >= SAFE_COLLECT_TURN_LIMIT
@@ -1138,16 +1268,17 @@ impl Solver {
         if state.colors.len() >= self.input.m {
             return None;
         }
+        let target_bfs_orders = self.build_target_bfs_orders(state);
         let target_color = self.input.d[state.colors.len()];
         let primary_bfs =
-            self.bfs_reachable_target_color_with_order(state, target_color, &TARGET_BFS_ORDERS[0]);
+            self.bfs_reachable_target_color_with_order(state, target_color, &target_bfs_orders[0]);
         let targets =
             self.choose_top_foods_of_color(state, &primary_bfs, target_color, GREEDY_TARGET_CANDIDATE_LIMIT);
         let mut best: Option<(GreedyEval, usize, Plan, BfsResult, FoodTarget)> = None;
 
         for target in targets {
             let mut seen_moves = Vec::new();
-            for order in TARGET_BFS_ORDERS {
+            for order in target_bfs_orders {
                 let bfs = self.bfs_reachable_target_color_with_order(state, target_color, &order);
                 let Some(moves) = bfs.restore_moves(target.cell) else {
                     continue;
@@ -1353,7 +1484,8 @@ impl Solver {
         &self,
         state: &SnakeState,
     ) -> Option<(Plan, BfsResult, FoodTarget)> {
-        let primary_bfs = self.bfs_reachable_first_food_with_order(state, &TARGET_BFS_ORDERS[0]);
+        let target_bfs_orders = self.build_target_bfs_orders(state);
+        let primary_bfs = self.bfs_reachable_first_food_with_order(state, &target_bfs_orders[0]);
         let targets =
             self.choose_top_foods(state, &primary_bfs, GREEDY_FALLBACK_CANDIDATE_LIMIT);
         let mut best: Option<(GreedyEval, usize, Plan, BfsResult, FoodTarget)> =
@@ -1361,7 +1493,7 @@ impl Solver {
 
         for target in targets {
             let mut seen_moves = Vec::new();
-            for order in TARGET_BFS_ORDERS {
+            for order in target_bfs_orders {
                 let bfs = self.bfs_reachable_first_food_with_order(state, &order);
                 let Some(moves) = bfs.restore_moves(target.cell) else {
                     continue;
@@ -1832,7 +1964,8 @@ impl Solver {
     }
 
     fn bfs_reachable_first_food(&self, state: &SnakeState) -> BfsResult {
-        self.bfs_reachable_first_food_with_order(state, &TARGET_BFS_ORDERS[0])
+        let orders = self.build_target_bfs_orders(state);
+        self.bfs_reachable_first_food_with_order(state, &orders[0])
     }
 
     fn bfs_reachable_first_food_with_order(
@@ -1880,7 +2013,8 @@ impl Solver {
     }
 
     fn bfs_reachable_target_color(&self, state: &SnakeState, target_color: usize) -> BfsResult {
-        self.bfs_reachable_target_color_with_order(state, target_color, &TARGET_BFS_ORDERS[0])
+        let orders = self.build_target_bfs_orders(state);
+        self.bfs_reachable_target_color_with_order(state, target_color, &orders[0])
     }
 
     fn bfs_reachable_food_target_cell(
@@ -1913,7 +2047,7 @@ impl Solver {
                 continue;
             }
 
-            for &op in &TARGET_BFS_ORDERS[0] {
+            for &op in &BFS_DIRECTIONS {
                 let Some(next) = self.try_advance(current, op) else {
                     continue;
                 };

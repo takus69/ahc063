@@ -18,7 +18,9 @@ const TARGETED_REPAIR_MAX_REMAINING_WRONG_TAIL: usize = 10;
 const RESTART_REBUILD_TARGET_HORIZON: usize = 4;
 const RESTART_REBUILD_REGROW_HORIZON: usize = 6;
 const PRE_BITE_NO_BITE_HORIZON: usize = 6;
+const PRE_BITE_NO_BITE_STRONG_HORIZON: usize = 8;
 const PRE_BITE_NO_BITE_RECHECK_REMAINING_FOOD_LIMIT: usize = 16;
+const PRE_BITE_NO_BITE_STRONG_REMAINING_FOOD_LIMIT: usize = 24;
 const BITE_CONTINUATION_HORIZON: usize = 2;
 const TARGET_BFS_ORDERS: [[char; 4]; 4] = [
     ['U', 'D', 'L', 'R'],
@@ -299,6 +301,13 @@ impl Solver {
                     if !self.plan_contains_bite(&state, &no_bite_moves) {
                         plan.moves = no_bite_moves;
                         plan.resume_greedy_after_apply = true;
+                    }
+                } else if self.remaining_food_count(&state) <= PRE_BITE_NO_BITE_STRONG_REMAINING_FOOD_LIMIT {
+                    if let Some(no_bite_moves) = self.plan_no_bite_rollout(&state, PRE_BITE_NO_BITE_STRONG_HORIZON, false) {
+                        if !self.plan_contains_bite(&state, &no_bite_moves) {
+                            plan.moves = no_bite_moves;
+                            plan.resume_greedy_after_apply = true;
+                        }
                     }
                 }
             }
@@ -650,13 +659,30 @@ impl Solver {
     }
 
     fn plan_pre_bite_no_bite_continuation(&self, state: &SnakeState) -> Option<Vec<char>> {
+        let mut best: Option<Vec<char>> = None;
+
+        let mut consider = |moves: Vec<char>, best: &mut Option<Vec<char>>| {
+            if moves.is_empty() || self.plan_contains_bite(state, &moves) {
+                return;
+            }
+            if best.as_ref().is_none_or(|current| self.is_better_no_bite_candidate(state, &moves, current)) {
+                *best = Some(moves);
+            }
+        };
+
         if let Some(moves) = self.plan_endgame_no_bite_finish(state) {
-            return Some(moves);
+            consider(moves, &mut best);
+        }
+
+        if self.remaining_food_count(state) <= PRE_BITE_NO_BITE_STRONG_REMAINING_FOOD_LIMIT {
+            if let Some(moves) = self.plan_no_bite_rollout(state, PRE_BITE_NO_BITE_STRONG_HORIZON, false) {
+                consider(moves, &mut best);
+            }
         }
 
         if self.remaining_food_count(state) <= PRE_BITE_NO_BITE_RECHECK_REMAINING_FOOD_LIMIT {
             if let Some(moves) = self.plan_no_bite_rollout(state, PRE_BITE_NO_BITE_HORIZON, true) {
-                return Some(moves);
+                consider(moves, &mut best);
             }
         }
 
@@ -666,18 +692,18 @@ impl Solver {
                 || eval.next_target_dist.is_some()
                 || eval.next_fallback_dist.is_some()
             {
-                return Some(plan.moves);
+                consider(plan.moves, &mut best);
             }
         }
 
         if let Some((plan, _, _)) = self.plan_greedy_fallback_inner(state) {
             let eval = self.evaluate_greedy_fallback_candidate(state, &plan.moves);
             if eval.next_target_dist.is_some() || eval.next_fallback_dist.is_some() {
-                return Some(plan.moves);
+                consider(plan.moves, &mut best);
             }
         }
 
-        None
+        best
     }
 
     fn plan_no_bite_rollout(
@@ -727,6 +753,43 @@ impl Solver {
             return None;
         }
         Some(ops)
+    }
+
+    fn is_better_no_bite_candidate(
+        &self,
+        state: &SnakeState,
+        candidate_moves: &[char],
+        current_moves: &[char],
+    ) -> bool {
+        let candidate = self.evaluate_no_bite_candidate(state, candidate_moves);
+        let current = self.evaluate_no_bite_candidate(state, current_moves);
+
+        candidate.0 && !current.0
+            || (candidate.0 == current.0 && candidate.1 > current.1)
+            || (candidate.0 == current.0 && candidate.1 == current.1 && candidate.2 > current.2)
+            || (candidate.0 == current.0 && candidate.1 == current.1 && candidate.2 == current.2 && candidate.3 > current.3)
+            || (candidate.0 == current.0 && candidate.1 == current.1 && candidate.2 == current.2 && candidate.3 == current.3 && candidate.4 > current.4)
+            || (candidate.0 == current.0 && candidate.1 == current.1 && candidate.2 == current.2 && candidate.3 == current.3 && candidate.4 == current.4 && candidate_moves.len() < current_moves.len())
+    }
+
+    fn evaluate_no_bite_candidate(
+        &self,
+        state: &SnakeState,
+        moves: &[char],
+    ) -> (bool, usize, usize, usize, usize) {
+        let mut simulated = SnakeState {
+            board: state.board.clone(),
+            positions: state.positions.clone(),
+            colors: state.colors.clone(),
+        };
+        self.apply_moves(&mut simulated, moves);
+        (
+            simulated.colors.len() == self.input.m && self.prefix_len(&simulated) == self.input.m,
+            self.prefix_len(&simulated),
+            simulated.colors.len(),
+            self.remaining_food_count(&simulated),
+            self.bfs_reachable_first_food(&simulated).reachable_food_count(&simulated),
+        )
     }
 
     fn plan_endgame_no_bite_finish(&self, state: &SnakeState) -> Option<Vec<char>> {

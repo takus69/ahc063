@@ -745,36 +745,16 @@ impl Solver {
         current_prefix_len: usize,
     ) -> Vec<usize> {
         let len = state.positions.len();
-        if len < 4 {
+        if len < 4 || current_prefix_len < 2 {
             return Vec::new();
         }
         let min_idx = 2usize;
-        let max_idx = len.saturating_sub(2);
+        let max_idx = len.saturating_sub(2).min(current_prefix_len);
         if min_idx > max_idx {
             return Vec::new();
         }
 
-        let mut used = vec![false; len];
-        let mut indices = Vec::new();
-
-        for idx in min_idx..=(max_idx.min(RESTART_BITE_FOR_TARGET_HEAD_CANDIDATE_LIMIT)) {
-            if !used[idx] {
-                used[idx] = true;
-                indices.push(idx);
-            }
-        }
-
-        let around_start = current_prefix_len.saturating_sub(2).max(min_idx);
-        let around_end = (current_prefix_len + 2).min(max_idx);
-        for idx in around_start..=around_end {
-            if !used[idx] {
-                used[idx] = true;
-                indices.push(idx);
-            }
-        }
-
-        indices.sort_unstable();
-        indices
+        (min_idx..=max_idx).collect()
     }
 
     fn is_better_restart_bite_for_target_candidate(
@@ -1184,17 +1164,17 @@ impl Solver {
             if state.board[i][j] != color {
                 return None;
             }
-            let bfs = self.bfs_reachable_food_target_cell(&state, (i, j));
-            let path = bfs.restore_moves((i, j))?;
+            let head = state.positions[0];
+            let op = Self::step(head, (i, j));
             let len_before = state.colors.len();
-            self.apply_moves(&mut state, &path);
+            self.apply_move(&mut state, op);
             if state.colors.len() != len_before + 1 {
                 return None;
             }
             if *state.colors.last().unwrap() != color {
                 return None;
             }
-            moves.extend(path);
+            moves.push(op);
         }
 
         Some((state, moves))

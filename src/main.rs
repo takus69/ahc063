@@ -17,10 +17,12 @@ const TARGETED_REPAIR_MAX_MISMATCH: usize = 3;
 const TARGETED_REPAIR_MAX_REMAINING_WRONG_TAIL: usize = 10;
 const RESTART_REBUILD_TARGET_HORIZON: usize = 4;
 const RESTART_REBUILD_REGROW_HORIZON: usize = 6;
+const RESTART_REBUILD_SA_SEED_LIMIT: usize = 6;
+const RESTART_REBUILD_SA_STEPS: usize = 28;
+const RESTART_REBUILD_TARGET_HORIZON_MIN: usize = 2;
+const RESTART_REBUILD_TARGET_HORIZON_MAX: usize = 6;
 const PRE_BITE_NO_BITE_HORIZON: usize = 6;
-const PRE_BITE_NO_BITE_STRONG_HORIZON: usize = 8;
 const PRE_BITE_NO_BITE_RECHECK_REMAINING_FOOD_LIMIT: usize = 16;
-const PRE_BITE_NO_BITE_STRONG_REMAINING_FOOD_LIMIT: usize = 24;
 const BITE_CONTINUATION_HORIZON: usize = 2;
 const TARGET_BFS_ORDERS: [[char; 4]; 4] = [
     ['U', 'D', 'L', 'R'],
@@ -179,6 +181,14 @@ struct RestartRebuildEval {
     total_moves_len: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RestartRebuildSaParam {
+    bite_idx: usize,
+    rebuild_order_idx: usize,
+    target_order_idx: usize,
+    target_horizon: usize,
+}
+
 #[derive(Clone, Debug)]
 struct BiteContinuationOutcome {
     state: SnakeState,
@@ -301,13 +311,6 @@ impl Solver {
                     if !self.plan_contains_bite(&state, &no_bite_moves) {
                         plan.moves = no_bite_moves;
                         plan.resume_greedy_after_apply = true;
-                    }
-                } else if self.remaining_food_count(&state) <= PRE_BITE_NO_BITE_STRONG_REMAINING_FOOD_LIMIT {
-                    if let Some(no_bite_moves) = self.plan_no_bite_rollout(&state, PRE_BITE_NO_BITE_STRONG_HORIZON, false) {
-                        if !self.plan_contains_bite(&state, &no_bite_moves) {
-                            plan.moves = no_bite_moves;
-                            plan.resume_greedy_after_apply = true;
-                        }
                     }
                 }
             }
@@ -659,30 +662,13 @@ impl Solver {
     }
 
     fn plan_pre_bite_no_bite_continuation(&self, state: &SnakeState) -> Option<Vec<char>> {
-        let mut best: Option<Vec<char>> = None;
-
-        let mut consider = |moves: Vec<char>, best: &mut Option<Vec<char>>| {
-            if moves.is_empty() || self.plan_contains_bite(state, &moves) {
-                return;
-            }
-            if best.as_ref().is_none_or(|current| self.is_better_no_bite_candidate(state, &moves, current)) {
-                *best = Some(moves);
-            }
-        };
-
         if let Some(moves) = self.plan_endgame_no_bite_finish(state) {
-            consider(moves, &mut best);
-        }
-
-        if self.remaining_food_count(state) <= PRE_BITE_NO_BITE_STRONG_REMAINING_FOOD_LIMIT {
-            if let Some(moves) = self.plan_no_bite_rollout(state, PRE_BITE_NO_BITE_STRONG_HORIZON, false) {
-                consider(moves, &mut best);
-            }
+            return Some(moves);
         }
 
         if self.remaining_food_count(state) <= PRE_BITE_NO_BITE_RECHECK_REMAINING_FOOD_LIMIT {
             if let Some(moves) = self.plan_no_bite_rollout(state, PRE_BITE_NO_BITE_HORIZON, true) {
-                consider(moves, &mut best);
+                return Some(moves);
             }
         }
 
@@ -692,18 +678,18 @@ impl Solver {
                 || eval.next_target_dist.is_some()
                 || eval.next_fallback_dist.is_some()
             {
-                consider(plan.moves, &mut best);
+                return Some(plan.moves);
             }
         }
 
         if let Some((plan, _, _)) = self.plan_greedy_fallback_inner(state) {
             let eval = self.evaluate_greedy_fallback_candidate(state, &plan.moves);
             if eval.next_target_dist.is_some() || eval.next_fallback_dist.is_some() {
-                consider(plan.moves, &mut best);
+                return Some(plan.moves);
             }
         }
 
-        best
+        None
     }
 
     fn plan_no_bite_rollout(
@@ -753,43 +739,6 @@ impl Solver {
             return None;
         }
         Some(ops)
-    }
-
-    fn is_better_no_bite_candidate(
-        &self,
-        state: &SnakeState,
-        candidate_moves: &[char],
-        current_moves: &[char],
-    ) -> bool {
-        let candidate = self.evaluate_no_bite_candidate(state, candidate_moves);
-        let current = self.evaluate_no_bite_candidate(state, current_moves);
-
-        candidate.0 && !current.0
-            || (candidate.0 == current.0 && candidate.1 > current.1)
-            || (candidate.0 == current.0 && candidate.1 == current.1 && candidate.2 > current.2)
-            || (candidate.0 == current.0 && candidate.1 == current.1 && candidate.2 == current.2 && candidate.3 > current.3)
-            || (candidate.0 == current.0 && candidate.1 == current.1 && candidate.2 == current.2 && candidate.3 == current.3 && candidate.4 > current.4)
-            || (candidate.0 == current.0 && candidate.1 == current.1 && candidate.2 == current.2 && candidate.3 == current.3 && candidate.4 == current.4 && candidate_moves.len() < current_moves.len())
-    }
-
-    fn evaluate_no_bite_candidate(
-        &self,
-        state: &SnakeState,
-        moves: &[char],
-    ) -> (bool, usize, usize, usize, usize) {
-        let mut simulated = SnakeState {
-            board: state.board.clone(),
-            positions: state.positions.clone(),
-            colors: state.colors.clone(),
-        };
-        self.apply_moves(&mut simulated, moves);
-        (
-            simulated.colors.len() == self.input.m && self.prefix_len(&simulated) == self.input.m,
-            self.prefix_len(&simulated),
-            simulated.colors.len(),
-            self.remaining_food_count(&simulated),
-            self.bfs_reachable_first_food(&simulated).reachable_food_count(&simulated),
-        )
     }
 
     fn plan_endgame_no_bite_finish(&self, state: &SnakeState) -> Option<Vec<char>> {
@@ -952,79 +901,60 @@ impl Solver {
         if current_prefix_len >= self.input.m {
             return None;
         }
+        let max_bite_idx = state.positions.len().saturating_sub(2);
+        if max_bite_idx < 2 {
+            return None;
+        }
 
-        let mut best: Option<(RestartRebuildEval, Vec<char>)> = None;
+        let mut seeds: Vec<(RestartRebuildEval, RestartRebuildSaParam)> = Vec::new();
+        let mut best: Option<(RestartRebuildEval, Vec<char>, RestartRebuildSaParam)> = None;
 
         for idx in 2..state.positions.len().saturating_sub(1) {
-            let Some((bite_moves, bitten, dropped_suffix)) =
-                self.simulate_bite_candidate_with_dropped_suffix(state, idx)
+            let param = RestartRebuildSaParam {
+                bite_idx: idx,
+                rebuild_order_idx: 0,
+                target_order_idx: 0,
+                target_horizon: RESTART_REBUILD_TARGET_HORIZON,
+            };
+            let Some((eval, moves)) =
+                self.evaluate_restart_rebuild_candidate_with_param(state, current_prefix_len, param)
             else {
                 continue;
             };
-            if bitten.colors.len() > current_prefix_len {
-                continue;
-            }
-            let rebuild_need = current_prefix_len.saturating_sub(bitten.colors.len());
-            if rebuild_need > dropped_suffix.len() {
-                continue;
-            }
-
-            let Some((rebuilt_state, rebuild_moves)) =
-                self.rebuild_prefix_suffix(bitten, &dropped_suffix, rebuild_need)
-            else {
-                continue;
-            };
-            if rebuilt_state.colors.len() != current_prefix_len {
-                continue;
-            }
-            if self.prefix_len(&rebuilt_state) != current_prefix_len {
-                continue;
-            }
-
-            let (rolled_state, rollout_moves, matched_target_hits) =
-                self.rollout_target_only_prefix_extension(&rebuilt_state, RESTART_REBUILD_TARGET_HORIZON);
-            let (final_state, regrow_moves) =
-                self.extend_restart_rebuild_no_bite(&rolled_state, RESTART_REBUILD_REGROW_HORIZON);
-            let final_prefix_len = self.prefix_len(&final_state);
-            if final_prefix_len <= current_prefix_len {
-                continue;
-            }
-
-            let next_target_dist = if final_state.colors.len() < self.input.m {
-                let want = self.input.d[final_state.colors.len()];
-                let bfs = self.bfs_reachable_target_color(&final_state, want);
-                self.choose_nearest_food_of_color(&final_state, &bfs, want)
-                    .map(|target| target.dist)
-            } else {
-                Some(0)
-            };
-            let reexpand_bfs = self.bfs_reachable_first_food(&final_state);
-            let total_moves_len = bite_moves.len() + rebuild_moves.len() + rollout_moves.len() + regrow_moves.len();
-            let eval = RestartRebuildEval {
-                rebuilt_prefix_len: current_prefix_len,
-                final_prefix_len,
-                final_length: final_state.colors.len(),
-                matched_target_hits,
-                completed: final_state.colors.len() == self.input.m && final_prefix_len == self.input.m,
-                next_target_dist,
-                reachable_cell_count: reexpand_bfs.reachable_cell_count(),
-                reachable_food_count: reexpand_bfs.reachable_food_count(&final_state),
-                total_moves_len,
-            };
-
-            let mut moves = bite_moves;
-            moves.extend(rebuild_moves);
-            moves.extend(rollout_moves);
-            moves.extend(regrow_moves);
 
             if best.as_ref().is_none_or(|current| {
                 self.is_better_restart_rebuild_candidate(eval, &moves, current.0, &current.1)
             }) {
-                best = Some((eval, moves));
+                best = Some((eval, moves.clone(), param));
+            }
+
+            seeds.push((eval, param));
+            seeds.sort_by(|a, b| {
+                if self.is_better_restart_rebuild_eval(a.0, b.0) {
+                    std::cmp::Ordering::Less
+                } else if self.is_better_restart_rebuild_eval(b.0, a.0) {
+                    std::cmp::Ordering::Greater
+                } else {
+                    std::cmp::Ordering::Equal
+                }
+            });
+            seeds.truncate(RESTART_REBUILD_SA_SEED_LIMIT);
+        }
+
+        for (_, seed_param) in seeds {
+            let Some((eval, moves, param)) =
+                self.run_restart_rebuild_local_sa(state, current_prefix_len, seed_param, max_bite_idx)
+            else {
+                continue;
+            };
+            if best.as_ref().is_none_or(|current| {
+                self.is_better_restart_rebuild_candidate(eval, &moves, current.0, &current.1)
+            }) {
+                best = Some((eval, moves, param));
             }
         }
 
-        let (_, moves) = best?;
+        let (_, moves, _) = best?;
         Some(Plan {
             phase: Phase::BiteRebuild,
             moves,
@@ -1032,20 +962,311 @@ impl Solver {
         })
     }
 
-    fn rebuild_prefix_suffix(
+    fn evaluate_restart_rebuild_candidate_with_param(
+        &self,
+        state: &SnakeState,
+        current_prefix_len: usize,
+        param: RestartRebuildSaParam,
+    ) -> Option<(RestartRebuildEval, Vec<char>)> {
+        let (bite_moves, bitten, dropped_suffix) =
+            self.simulate_bite_candidate_with_dropped_suffix(state, param.bite_idx)?;
+        if bitten.colors.len() > current_prefix_len {
+            return None;
+        }
+        let rebuild_need = current_prefix_len.saturating_sub(bitten.colors.len());
+        if rebuild_need > dropped_suffix.len() {
+            return None;
+        }
+
+        let (rebuilt_state, rebuild_moves) = self.rebuild_prefix_suffix_with_order(
+            bitten,
+            &dropped_suffix,
+            rebuild_need,
+            param.rebuild_order_idx,
+        )?;
+        if rebuilt_state.colors.len() != current_prefix_len {
+            return None;
+        }
+        if self.prefix_len(&rebuilt_state) != current_prefix_len {
+            return None;
+        }
+
+        let (rolled_state, rollout_moves, matched_target_hits) =
+            self.rollout_target_only_prefix_extension_with_order(
+                &rebuilt_state,
+                param.target_horizon,
+                param.target_order_idx,
+            );
+        let (final_state, regrow_moves) =
+            self.extend_restart_rebuild_no_bite(&rolled_state, RESTART_REBUILD_REGROW_HORIZON);
+        let final_prefix_len = self.prefix_len(&final_state);
+        if final_prefix_len <= current_prefix_len {
+            return None;
+        }
+
+        let next_target_dist = if final_state.colors.len() < self.input.m {
+            let want = self.input.d[final_state.colors.len()];
+            let bfs = self.bfs_reachable_target_color(&final_state, want);
+            self.choose_nearest_food_of_color(&final_state, &bfs, want)
+                .map(|target| target.dist)
+        } else {
+            Some(0)
+        };
+        let reexpand_bfs = self.bfs_reachable_first_food(&final_state);
+        let total_moves_len =
+            bite_moves.len() + rebuild_moves.len() + rollout_moves.len() + regrow_moves.len();
+        let eval = RestartRebuildEval {
+            rebuilt_prefix_len: current_prefix_len,
+            final_prefix_len,
+            final_length: final_state.colors.len(),
+            matched_target_hits,
+            completed: final_state.colors.len() == self.input.m && final_prefix_len == self.input.m,
+            next_target_dist,
+            reachable_cell_count: reexpand_bfs.reachable_cell_count(),
+            reachable_food_count: reexpand_bfs.reachable_food_count(&final_state),
+            total_moves_len,
+        };
+
+        let mut moves = bite_moves;
+        moves.extend(rebuild_moves);
+        moves.extend(rollout_moves);
+        moves.extend(regrow_moves);
+        Some((eval, moves))
+    }
+
+    fn run_restart_rebuild_local_sa(
+        &self,
+        state: &SnakeState,
+        current_prefix_len: usize,
+        seed_param: RestartRebuildSaParam,
+        max_bite_idx: usize,
+    ) -> Option<(RestartRebuildEval, Vec<char>, RestartRebuildSaParam)> {
+        let (mut current_eval, mut current_moves) =
+            self.evaluate_restart_rebuild_candidate_with_param(state, current_prefix_len, seed_param)?;
+        let mut current_param = seed_param;
+        let mut best_eval = current_eval;
+        let mut best_moves = current_moves.clone();
+        let mut best_param = current_param;
+
+        let mut rand_state = self.restart_rebuild_seed(state, seed_param);
+        for step in 0..RESTART_REBUILD_SA_STEPS {
+            rand_state = self.splitmix64(rand_state.wrapping_add(step as u64 + 1));
+            let candidate_param = self.mutate_restart_rebuild_param(current_param, max_bite_idx, rand_state);
+            let Some((candidate_eval, candidate_moves)) =
+                self.evaluate_restart_rebuild_candidate_with_param(state, current_prefix_len, candidate_param)
+            else {
+                continue;
+            };
+
+            if self.accept_restart_rebuild_transition(
+                current_eval,
+                candidate_eval,
+                step,
+                self.rand01(self.splitmix64(rand_state ^ 0x9e37_79b9_7f4a_7c15)),
+            ) {
+                current_eval = candidate_eval;
+                current_moves = candidate_moves;
+                current_param = candidate_param;
+            }
+
+            if self.is_better_restart_rebuild_candidate(current_eval, &current_moves, best_eval, &best_moves)
+            {
+                best_eval = current_eval;
+                best_moves = current_moves.clone();
+                best_param = current_param;
+            }
+        }
+
+        for bite_idx in best_param.bite_idx.saturating_sub(2)..=usize::min(best_param.bite_idx + 2, max_bite_idx) {
+            for rebuild_order_idx in 0..TARGET_BFS_ORDERS.len() {
+                for target_order_idx in 0..TARGET_BFS_ORDERS.len() {
+                    for target_horizon in best_param.target_horizon.saturating_sub(1)
+                        ..=usize::min(best_param.target_horizon + 1, RESTART_REBUILD_TARGET_HORIZON_MAX)
+                    {
+                        let param = RestartRebuildSaParam {
+                            bite_idx,
+                            rebuild_order_idx,
+                            target_order_idx,
+                            target_horizon: target_horizon.max(RESTART_REBUILD_TARGET_HORIZON_MIN),
+                        };
+                        let Some((eval, moves)) = self
+                            .evaluate_restart_rebuild_candidate_with_param(state, current_prefix_len, param)
+                        else {
+                            continue;
+                        };
+                        if self.is_better_restart_rebuild_candidate(eval, &moves, best_eval, &best_moves)
+                        {
+                            best_eval = eval;
+                            best_moves = moves;
+                            best_param = param;
+                        }
+                    }
+                }
+            }
+        }
+
+        Some((best_eval, best_moves, best_param))
+    }
+
+    fn restart_rebuild_seed(
+        &self,
+        state: &SnakeState,
+        param: RestartRebuildSaParam,
+    ) -> u64 {
+        let head = state.positions[0];
+        ((head.0 as u64) << 48)
+            ^ ((head.1 as u64) << 40)
+            ^ ((state.colors.len() as u64) << 24)
+            ^ ((self.ops.len() as u64) << 8)
+            ^ (param.bite_idx as u64)
+            ^ ((param.rebuild_order_idx as u64) << 3)
+            ^ ((param.target_order_idx as u64) << 5)
+            ^ ((param.target_horizon as u64) << 7)
+    }
+
+    fn mutate_restart_rebuild_param(
+        &self,
+        current: RestartRebuildSaParam,
+        max_bite_idx: usize,
+        rand_state: u64,
+    ) -> RestartRebuildSaParam {
+        let mut next = current;
+        match rand_state % 4 {
+            0 => {
+                let deltas = [-2isize, -1, 1, 2, 3, -3];
+                let delta = deltas[((rand_state >> 8) as usize) % deltas.len()];
+                let candidate = next.bite_idx.saturating_add_signed(delta);
+                next.bite_idx = candidate.clamp(2, max_bite_idx);
+            }
+            1 => {
+                next.rebuild_order_idx = ((rand_state >> 8) as usize) % TARGET_BFS_ORDERS.len();
+            }
+            2 => {
+                next.target_order_idx = ((rand_state >> 16) as usize) % TARGET_BFS_ORDERS.len();
+            }
+            _ => {
+                let delta = if ((rand_state >> 8) & 1) == 0 { -1isize } else { 1isize };
+                let candidate = next.target_horizon.saturating_add_signed(delta);
+                next.target_horizon = candidate.clamp(
+                    RESTART_REBUILD_TARGET_HORIZON_MIN,
+                    RESTART_REBUILD_TARGET_HORIZON_MAX,
+                );
+            }
+        }
+        next
+    }
+
+    fn accept_restart_rebuild_transition(
+        &self,
+        current_eval: RestartRebuildEval,
+        candidate_eval: RestartRebuildEval,
+        step: usize,
+        rand01: f64,
+    ) -> bool {
+        if self.is_better_restart_rebuild_eval(candidate_eval, current_eval) {
+            return true;
+        }
+        let current_score = self.restart_rebuild_anneal_score(current_eval);
+        let candidate_score = self.restart_rebuild_anneal_score(candidate_eval);
+        let delta = candidate_score - current_score;
+        if delta >= 0.0 {
+            return true;
+        }
+        let progress = step as f64 / RESTART_REBUILD_SA_STEPS.max(1) as f64;
+        let temp = 8000.0 * (1.0 - progress) + 200.0 * progress;
+        rand01 < (delta / temp).exp()
+    }
+
+    fn restart_rebuild_anneal_score(&self, eval: RestartRebuildEval) -> f64 {
+        let completed = if eval.completed { 1_000_000_000.0 } else { 0.0 };
+        completed
+            + eval.final_prefix_len as f64 * 10_000_000.0
+            + eval.final_length as f64 * 100_000.0
+            + eval.matched_target_hits as f64 * 10_000.0
+            + eval.reachable_food_count as f64 * 100.0
+            + eval.reachable_cell_count as f64
+            - eval.next_target_dist.unwrap_or(usize::MAX.min(10_000)) as f64 * 10.0
+            - eval.total_moves_len as f64
+    }
+
+    fn is_better_restart_rebuild_eval(
+        &self,
+        candidate_eval: RestartRebuildEval,
+        current_eval: RestartRebuildEval,
+    ) -> bool {
+        candidate_eval.completed && !current_eval.completed
+            || (candidate_eval.completed == current_eval.completed
+                && candidate_eval.final_prefix_len > current_eval.final_prefix_len)
+            || (candidate_eval.completed == current_eval.completed
+                && candidate_eval.final_prefix_len == current_eval.final_prefix_len
+                && candidate_eval.final_length > current_eval.final_length)
+            || (candidate_eval.completed == current_eval.completed
+                && candidate_eval.final_prefix_len == current_eval.final_prefix_len
+                && candidate_eval.final_length == current_eval.final_length
+                && candidate_eval.matched_target_hits > current_eval.matched_target_hits)
+            || (candidate_eval.completed == current_eval.completed
+                && candidate_eval.final_prefix_len == current_eval.final_prefix_len
+                && candidate_eval.final_length == current_eval.final_length
+                && candidate_eval.matched_target_hits == current_eval.matched_target_hits
+                && candidate_eval.next_target_dist.is_some()
+                && current_eval.next_target_dist.is_none())
+            || (candidate_eval.completed == current_eval.completed
+                && candidate_eval.final_prefix_len == current_eval.final_prefix_len
+                && candidate_eval.final_length == current_eval.final_length
+                && candidate_eval.matched_target_hits == current_eval.matched_target_hits
+                && candidate_eval.next_target_dist.is_some() == current_eval.next_target_dist.is_some()
+                && candidate_eval.next_target_dist.unwrap_or(usize::MAX)
+                    < current_eval.next_target_dist.unwrap_or(usize::MAX))
+            || (candidate_eval.completed == current_eval.completed
+                && candidate_eval.final_prefix_len == current_eval.final_prefix_len
+                && candidate_eval.final_length == current_eval.final_length
+                && candidate_eval.matched_target_hits == current_eval.matched_target_hits
+                && candidate_eval.next_target_dist == current_eval.next_target_dist
+                && candidate_eval.reachable_food_count > current_eval.reachable_food_count)
+            || (candidate_eval.completed == current_eval.completed
+                && candidate_eval.final_prefix_len == current_eval.final_prefix_len
+                && candidate_eval.final_length == current_eval.final_length
+                && candidate_eval.matched_target_hits == current_eval.matched_target_hits
+                && candidate_eval.next_target_dist == current_eval.next_target_dist
+                && candidate_eval.reachable_food_count == current_eval.reachable_food_count
+                && candidate_eval.reachable_cell_count > current_eval.reachable_cell_count)
+            || (candidate_eval.completed == current_eval.completed
+                && candidate_eval.final_prefix_len == current_eval.final_prefix_len
+                && candidate_eval.final_length == current_eval.final_length
+                && candidate_eval.matched_target_hits == current_eval.matched_target_hits
+                && candidate_eval.next_target_dist == current_eval.next_target_dist
+                && candidate_eval.reachable_food_count == current_eval.reachable_food_count
+                && candidate_eval.reachable_cell_count == current_eval.reachable_cell_count
+                && candidate_eval.total_moves_len < current_eval.total_moves_len)
+    }
+
+    fn splitmix64(&self, mut x: u64) -> u64 {
+        x = x.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        x ^ (x >> 31)
+    }
+
+    fn rand01(&self, x: u64) -> f64 {
+        ((x >> 11) as f64) / ((1u64 << 53) as f64)
+    }
+
+    fn rebuild_prefix_suffix_with_order(
         &self,
         bitten: SnakeState,
         dropped_suffix: &[((usize, usize), usize)],
         rebuild_need: usize,
+        order_idx: usize,
     ) -> Option<(SnakeState, Vec<char>)> {
         let mut state = bitten;
         let mut moves = Vec::new();
+        let order = &TARGET_BFS_ORDERS[order_idx % TARGET_BFS_ORDERS.len()];
 
         for &((i, j), color) in dropped_suffix.iter().take(rebuild_need) {
             if state.board[i][j] != color {
                 return None;
             }
-            let bfs = self.bfs_reachable_food_target_cell(&state, (i, j));
+            let bfs = self.bfs_reachable_food_target_cell_with_order(&state, (i, j), order);
             let path = bfs.restore_moves((i, j))?;
             let len_before = state.colors.len();
             self.apply_moves(&mut state, &path);
@@ -1061,10 +1282,11 @@ impl Solver {
         Some((state, moves))
     }
 
-    fn rollout_target_only_prefix_extension(
+    fn rollout_target_only_prefix_extension_with_order(
         &self,
         rebuilt: &SnakeState,
         horizon: usize,
+        order_idx: usize,
     ) -> (SnakeState, Vec<char>, usize) {
         let mut state = SnakeState {
             board: rebuilt.board.clone(),
@@ -1073,11 +1295,12 @@ impl Solver {
         };
         let mut moves = Vec::new();
         let mut matched_target_hits = 0;
+        let order = &TARGET_BFS_ORDERS[order_idx % TARGET_BFS_ORDERS.len()];
 
         while matched_target_hits < horizon && state.colors.len() < self.input.m {
             let expected_idx = state.colors.len();
             let target_color = self.input.d[expected_idx];
-            let bfs = self.bfs_reachable_target_color(&state, target_color);
+            let bfs = self.bfs_reachable_target_color_with_order(&state, target_color, order);
             let Some(target) = self.choose_nearest_food_of_color(&state, &bfs, target_color) else {
                 break;
             };
@@ -2629,6 +2852,15 @@ impl Solver {
         state: &SnakeState,
         target: (usize, usize),
     ) -> BfsResult {
+        self.bfs_reachable_food_target_cell_with_order(state, target, &TARGET_BFS_ORDERS[0])
+    }
+
+    fn bfs_reachable_food_target_cell_with_order(
+        &self,
+        state: &SnakeState,
+        target: (usize, usize),
+        order: &[char; 4],
+    ) -> BfsResult {
         let start = state.positions[0];
         let mut result = BfsResult::new(self.input.n, start);
         let mut cell_open_turn = self.build_cell_open_turn(state);
@@ -2654,7 +2886,7 @@ impl Solver {
                 continue;
             }
 
-            for &op in &TARGET_BFS_ORDERS[0] {
+            for &op in order {
                 let Some(next) = self.try_advance(current, op) else {
                     continue;
                 };

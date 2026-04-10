@@ -618,38 +618,15 @@ impl Solver {
     }
 
     fn plan_greedy_target(&self, state: &SnakeState) -> Option<Plan> {
-        let greedy = self.plan_greedy_target_inner(state);
-        let restart = self.plan_restart_bite_for_target_with_eval(state);
-
-        match (greedy, restart) {
-            (Some((plan, bfs, target, target_color)), Some((restart_plan, restart_eval))) => {
-                let greedy_eval = self.evaluate_greedy_target_candidate(state, &plan.moves);
-                if self.should_prefer_restart_bite_for_target(restart_eval, greedy_eval, &restart_plan.moves, &plan.moves) {
-                    Some(restart_plan)
-                } else {
-                    self.write_bfs_snapshot(
-                        self.ops.len(),
-                        Phase::GreedyTarget,
-                        Some(target_color),
-                        target.cell,
-                        &bfs,
-                    );
-                    Some(plan)
-                }
-            }
-            (Some((plan, bfs, target, target_color)), None) => {
-                self.write_bfs_snapshot(
-                    self.ops.len(),
-                    Phase::GreedyTarget,
-                    Some(target_color),
-                    target.cell,
-                    &bfs,
-                );
-                Some(plan)
-            }
-            (None, Some((restart_plan, _))) => Some(restart_plan),
-            (None, None) => None,
-        }
+        let (plan, bfs, target, target_color) = self.plan_greedy_target_inner(state)?;
+        self.write_bfs_snapshot(
+            self.ops.len(),
+            Phase::GreedyTarget,
+            Some(target_color),
+            target.cell,
+            &bfs,
+        );
+        Some(plan)
     }
 
     fn plan_greedy_fallback(&self, state: &SnakeState) -> Option<Plan> {
@@ -669,20 +646,15 @@ impl Solver {
     }
 
     fn plan_restart_bite_for_target(&self, state: &SnakeState) -> Option<Plan> {
-        self.plan_restart_bite_for_target_with_eval(state)
-            .map(|(plan, _)| plan)
-    }
-
-    fn plan_restart_bite_for_target_with_eval(
-        &self,
-        state: &SnakeState,
-    ) -> Option<(Plan, RestartBiteForTargetEval)> {
         if state.colors.len() >= self.input.m {
+            return None;
+        }
+        if self.plan_greedy_target_inner(state).is_some() {
             return None;
         }
 
         let current_prefix_len = self.prefix_len(state);
-        let want = self.input.d[state.colors.len()];
+        let want = self.input.d[current_prefix_len];
         let mut best: Option<(RestartBiteForTargetEval, Vec<char>)> = None;
 
         for idx in self.collect_restart_bite_target_candidate_indices(state, current_prefix_len) {
@@ -759,15 +731,12 @@ impl Solver {
             }
         }
 
-        let (eval, moves) = best?;
-        Some((
-            Plan {
-                phase: Phase::GreedyTarget,
-                moves,
-                resume_greedy_after_apply: false,
-            },
-            eval,
-        ))
+        let (_, moves) = best?;
+        Some(Plan {
+            phase: Phase::GreedyFallback,
+            moves,
+            resume_greedy_after_apply: false,
+        })
     }
 
     fn collect_restart_bite_target_candidate_indices(
@@ -832,36 +801,6 @@ impl Solver {
             || (candidate_eval == current_eval && candidate_moves.len() < current_moves.len())
     }
 
-
-    fn should_prefer_restart_bite_for_target(
-        &self,
-        restart_eval: RestartBiteForTargetEval,
-        greedy_eval: GreedyEval,
-        restart_moves: &[char],
-        greedy_moves: &[char],
-    ) -> bool {
-        restart_eval.projected_prefix_len > greedy_eval.projected_prefix_len
-            || (restart_eval.projected_prefix_len == greedy_eval.projected_prefix_len
-                && restart_eval.matched_target_hits > greedy_eval.projected_matched_target_hits)
-            || (restart_eval.projected_prefix_len == greedy_eval.projected_prefix_len
-                && restart_eval.matched_target_hits == greedy_eval.projected_matched_target_hits
-                && restart_eval.next_target_dist.is_some()
-                && greedy_eval.next_target_dist.is_none())
-            || (restart_eval.projected_prefix_len == greedy_eval.projected_prefix_len
-                && restart_eval.matched_target_hits == greedy_eval.projected_matched_target_hits
-                && restart_eval.next_target_dist.is_some() == greedy_eval.next_target_dist.is_some()
-                && restart_eval.next_target_dist.unwrap_or(usize::MAX)
-                    < greedy_eval.next_target_dist.unwrap_or(usize::MAX))
-            || (restart_eval.projected_prefix_len == greedy_eval.projected_prefix_len
-                && restart_eval.matched_target_hits == greedy_eval.projected_matched_target_hits
-                && restart_eval.next_target_dist == greedy_eval.next_target_dist
-                && restart_eval.projected_final_length > greedy_eval.projected_final_length)
-            || (restart_eval.projected_prefix_len == greedy_eval.projected_prefix_len
-                && restart_eval.matched_target_hits == greedy_eval.projected_matched_target_hits
-                && restart_eval.next_target_dist == greedy_eval.next_target_dist
-                && restart_eval.projected_final_length == greedy_eval.projected_final_length
-                && restart_moves.len() < greedy_moves.len())
-    }
 
     fn plan_safe_collect(&self, state: &SnakeState) -> Option<Plan> {
         let (moves, resume_greedy_after_apply) = if self.force_safe_collect_mode {

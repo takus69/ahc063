@@ -149,6 +149,8 @@ struct TargetedRepairEval {
     kept_prefix_exact: bool,
     can_reach_want: bool,
     dist_to_want: Option<usize>,
+    prefix_after_want: usize,
+    can_extend_prefix_after_want: bool,
     best_exit_can_reach_want: bool,
     best_exit_dist_to_want: Option<usize>,
     best_exit_reachable_cell_count: usize,
@@ -638,8 +640,16 @@ impl Solver {
     }
 
     fn plan_bite_rebuild(&self, state: &SnakeState) -> Option<Plan> {
-        self.plan_targeted_suffix_repair(state)
-            .or_else(|| self.plan_bite_rebuild_fallback(state))
+        if let Some(plan) = self.plan_targeted_suffix_repair(state) {
+            return Some(plan);
+        }
+
+        let mismatch = self.current_mismatch_count(state).unwrap_or(usize::MAX);
+        if state.colors.len() == self.input.m && mismatch <= 8 {
+            return None;
+        }
+
+        self.plan_bite_rebuild_fallback(state)
     }
 
     fn plan_bite_rebuild_fallback(&self, state: &SnakeState) -> Option<Plan> {
@@ -778,6 +788,10 @@ impl Solver {
             target_lengths.push(p - 2);
         }
 
+        let current_mismatch = self
+            .current_mismatch_count(state)
+            .unwrap_or(usize::MAX);
+
         let mut best: Option<(TargetedRepairEval, usize, Vec<char>)> = None;
         for &target_prefix_len in &target_lengths {
             for idx in 2..state.positions.len().saturating_sub(1) {
@@ -789,7 +803,13 @@ impl Solver {
                 if bitten.colors.len() < 5 || bitten.colors.len() > target_prefix_len {
                     continue;
                 }
-                let eval = self.evaluate_targeted_repair_candidate(&bitten, target_prefix_len);
+
+                let eval = self.evaluate_targeted_repair_candidate(
+                    state,
+                    &bitten,
+                    target_prefix_len,
+                    current_mismatch,
+                );
                 let candidate = (eval, moves.len(), moves);
                 if best.as_ref().is_none_or(|current| {
                     self.is_better_targeted_repair_candidate(
@@ -802,14 +822,13 @@ impl Solver {
                     best = Some(candidate);
                 }
             }
-            if let Some((eval, _, _)) = best {
-                if eval.target_prefix_len == target_prefix_len && eval.can_reach_want {
-                    break;
-                }
-            }
         }
 
-        let (_, _, moves) = best?;
+        let (eval, _, moves) = best?;
+        if !eval.can_reach_want {
+            return None;
+        }
+
         Some(Plan {
             phase: Phase::BiteRebuild,
             moves,
@@ -819,16 +838,38 @@ impl Solver {
 
     fn evaluate_targeted_repair_candidate(
         &self,
+        original: &SnakeState,
         bitten: &SnakeState,
         target_prefix_len: usize,
+        current_mismatch: usize,
     ) -> TargetedRepairEval {
         let kept_prefix_exact = bitten.colors.len() == target_prefix_len
             && self.prefix_len(bitten) == target_prefix_len;
         let want = self.input.d[target_prefix_len];
         let bfs = self.bfs_reachable_target_color(bitten, want);
-        let dist_to_want = self
-            .choose_nearest_food_of_color(bitten, &bfs, want)
-            .map(|target| target.dist);
+        let target = self.choose_nearest_food_of_color(bitten, &bfs, want);
+        let dist_to_want = target.map(|target| target.dist);
+
+        let mut prefix_after_want = 0;
+        if let Some(target) = target {
+            if let Some(moves) = bfs.restore_moves(target.cell) {
+                let mut after_want = SnakeState {
+                    board: bitten.board.clone(),
+                    positions: bitten.positions.clone(),
+                    colors: bitten.colors.clone(),
+                };
+                self.apply_moves(&mut after_want, &moves);
+                prefix_after_want = self.prefix_len(&after_want);
+
+                let mismatch_after_want = self
+                    .current_mismatch_count(&after_want)
+                    .unwrap_or(usize::MAX);
+                if mismatch_after_want >= current_mismatch && prefix_after_want <= target_prefix_len {
+                    prefix_after_want = 0;
+                }
+            }
+        }
+
         let exit_eval = self.best_exit_eval_after_bite(bitten, want);
 
         TargetedRepairEval {
@@ -837,11 +878,26 @@ impl Solver {
             kept_prefix_exact,
             can_reach_want: dist_to_want.is_some(),
             dist_to_want,
+            prefix_after_want,
+            can_extend_prefix_after_want: prefix_after_want > target_prefix_len,
             best_exit_can_reach_want: exit_eval.can_reach_want,
             best_exit_dist_to_want: exit_eval.dist_to_want,
             best_exit_reachable_cell_count: exit_eval.reachable_cell_count,
             best_exit_reachable_food_count: exit_eval.reachable_food_count,
         }
+    }
+
+    fn current_mismatch_count(&self, state: &SnakeState) -> Option<usize> {
+        if state.colors.len() != self.input.m {
+            return None;
+        }
+        Some(
+            state.colors
+                .iter()
+                .zip(self.input.d.iter())
+                .filter(|(actual, desired)| actual != desired)
+                .count(),
+        )
     }
 
     fn best_exit_eval_after_bite(&self, bitten: &SnakeState, want: usize) -> ExitEval {
@@ -912,27 +968,59 @@ impl Solver {
         current_eval: TargetedRepairEval,
         current_moves_len: usize,
     ) -> bool {
-        candidate_eval.kept_prefix_exact && !current_eval.kept_prefix_exact
-            || (candidate_eval.kept_prefix_exact == current_eval.kept_prefix_exact
+        candidate_eval.target_prefix_len > current_eval.target_prefix_len
+            || (candidate_eval.target_prefix_len == current_eval.target_prefix_len
+                && candidate_eval.kept_prefix_exact
+                && !current_eval.kept_prefix_exact)
+            || (candidate_eval.target_prefix_len == current_eval.target_prefix_len
+                && candidate_eval.kept_prefix_exact == current_eval.kept_prefix_exact
+                && candidate_eval.can_extend_prefix_after_want
+                && !current_eval.can_extend_prefix_after_want)
+            || (candidate_eval.target_prefix_len == current_eval.target_prefix_len
+                && candidate_eval.kept_prefix_exact == current_eval.kept_prefix_exact
+                && candidate_eval.can_extend_prefix_after_want
+                    == current_eval.can_extend_prefix_after_want
+                && candidate_eval.prefix_after_want > current_eval.prefix_after_want)
+            || (candidate_eval.target_prefix_len == current_eval.target_prefix_len
+                && candidate_eval.kept_prefix_exact == current_eval.kept_prefix_exact
+                && candidate_eval.can_extend_prefix_after_want
+                    == current_eval.can_extend_prefix_after_want
+                && candidate_eval.prefix_after_want == current_eval.prefix_after_want
                 && candidate_eval.can_reach_want
                 && !current_eval.can_reach_want)
-            || (candidate_eval.kept_prefix_exact == current_eval.kept_prefix_exact
+            || (candidate_eval.target_prefix_len == current_eval.target_prefix_len
+                && candidate_eval.kept_prefix_exact == current_eval.kept_prefix_exact
+                && candidate_eval.can_extend_prefix_after_want
+                    == current_eval.can_extend_prefix_after_want
+                && candidate_eval.prefix_after_want == current_eval.prefix_after_want
                 && candidate_eval.can_reach_want == current_eval.can_reach_want
                 && candidate_eval.dist_to_want.unwrap_or(usize::MAX)
                     < current_eval.dist_to_want.unwrap_or(usize::MAX))
-            || (candidate_eval.kept_prefix_exact == current_eval.kept_prefix_exact
+            || (candidate_eval.target_prefix_len == current_eval.target_prefix_len
+                && candidate_eval.kept_prefix_exact == current_eval.kept_prefix_exact
+                && candidate_eval.can_extend_prefix_after_want
+                    == current_eval.can_extend_prefix_after_want
+                && candidate_eval.prefix_after_want == current_eval.prefix_after_want
                 && candidate_eval.can_reach_want == current_eval.can_reach_want
                 && candidate_eval.dist_to_want == current_eval.dist_to_want
                 && candidate_eval.best_exit_can_reach_want
                 && !current_eval.best_exit_can_reach_want)
-            || (candidate_eval.kept_prefix_exact == current_eval.kept_prefix_exact
+            || (candidate_eval.target_prefix_len == current_eval.target_prefix_len
+                && candidate_eval.kept_prefix_exact == current_eval.kept_prefix_exact
+                && candidate_eval.can_extend_prefix_after_want
+                    == current_eval.can_extend_prefix_after_want
+                && candidate_eval.prefix_after_want == current_eval.prefix_after_want
                 && candidate_eval.can_reach_want == current_eval.can_reach_want
                 && candidate_eval.dist_to_want == current_eval.dist_to_want
                 && candidate_eval.best_exit_can_reach_want
                     == current_eval.best_exit_can_reach_want
                 && candidate_eval.best_exit_dist_to_want.unwrap_or(usize::MAX)
                     < current_eval.best_exit_dist_to_want.unwrap_or(usize::MAX))
-            || (candidate_eval.kept_prefix_exact == current_eval.kept_prefix_exact
+            || (candidate_eval.target_prefix_len == current_eval.target_prefix_len
+                && candidate_eval.kept_prefix_exact == current_eval.kept_prefix_exact
+                && candidate_eval.can_extend_prefix_after_want
+                    == current_eval.can_extend_prefix_after_want
+                && candidate_eval.prefix_after_want == current_eval.prefix_after_want
                 && candidate_eval.can_reach_want == current_eval.can_reach_want
                 && candidate_eval.dist_to_want == current_eval.dist_to_want
                 && candidate_eval.best_exit_can_reach_want
@@ -940,7 +1028,11 @@ impl Solver {
                 && candidate_eval.best_exit_dist_to_want == current_eval.best_exit_dist_to_want
                 && candidate_eval.best_exit_reachable_cell_count
                     > current_eval.best_exit_reachable_cell_count)
-            || (candidate_eval.kept_prefix_exact == current_eval.kept_prefix_exact
+            || (candidate_eval.target_prefix_len == current_eval.target_prefix_len
+                && candidate_eval.kept_prefix_exact == current_eval.kept_prefix_exact
+                && candidate_eval.can_extend_prefix_after_want
+                    == current_eval.can_extend_prefix_after_want
+                && candidate_eval.prefix_after_want == current_eval.prefix_after_want
                 && candidate_eval.can_reach_want == current_eval.can_reach_want
                 && candidate_eval.dist_to_want == current_eval.dist_to_want
                 && candidate_eval.best_exit_can_reach_want

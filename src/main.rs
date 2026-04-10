@@ -603,6 +603,10 @@ impl Solver {
             return Phase::SafeCollect;
         }
 
+        if self.should_prefer_restart_before_greedy_target(state) {
+            return Phase::GreedyFallback;
+        }
+
         if self.plan_greedy_target_inner(state).is_some() {
             return Phase::GreedyTarget;
         }
@@ -617,7 +621,19 @@ impl Solver {
         Phase::GreedyFallback
     }
 
+
+    fn should_prefer_restart_before_greedy_target(&self, state: &SnakeState) -> bool {
+        if state.colors.len() >= self.input.m {
+            return false;
+        }
+        self.plan_restart_bite_for_target(state).is_some()
+    }
+
     fn plan_greedy_target(&self, state: &SnakeState) -> Option<Plan> {
+        if let Some(plan) = self.plan_restart_bite_for_target(state) {
+            return Some(plan);
+        }
+
         let (plan, bfs, target, target_color) = self.plan_greedy_target_inner(state)?;
         self.write_bfs_snapshot(
             self.ops.len(),
@@ -649,9 +665,6 @@ impl Solver {
         if state.colors.len() >= self.input.m {
             return None;
         }
-        if self.plan_greedy_target_inner(state).is_some() {
-            return None;
-        }
 
         let current_prefix_len = self.prefix_len(state);
         let want = self.input.d[current_prefix_len];
@@ -663,10 +676,11 @@ impl Solver {
             else {
                 continue;
             };
-            if bitten.colors.len() > current_prefix_len {
+            let replay_target_len = current_prefix_len.saturating_sub(1);
+            if bitten.colors.len() > replay_target_len {
                 continue;
             }
-            let rebuild_need = current_prefix_len.saturating_sub(bitten.colors.len());
+            let rebuild_need = replay_target_len.saturating_sub(bitten.colors.len());
             if rebuild_need > dropped_suffix.len() {
                 continue;
             }
@@ -675,10 +689,10 @@ impl Solver {
             else {
                 continue;
             };
-            if rebuilt_state.colors.len() != current_prefix_len {
+            if rebuilt_state.colors.len() != replay_target_len {
                 continue;
             }
-            if self.prefix_len(&rebuilt_state) != current_prefix_len {
+            if self.prefix_len(&rebuilt_state) != replay_target_len {
                 continue;
             }
 
@@ -733,7 +747,7 @@ impl Solver {
 
         let (_, moves) = best?;
         Some(Plan {
-            phase: Phase::GreedyFallback,
+            phase: Phase::GreedyTarget,
             moves,
             resume_greedy_after_apply: false,
         })

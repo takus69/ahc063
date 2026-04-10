@@ -841,3 +841,28 @@
 考察:
 - 今回の変更は評価バランスの微調整なので、効果は 200 ケース集計で見ないと判断しにくい
 - この環境では `simulator.py` を回す Python が無いため、200 ケース確認は手元環境での再実行が必要
+変更: `SafeCollect` の bite 候補評価で、bite 後 continuation として `Greedy continuation` と `食べ直し continuation` を同じ捕食個数 horizon (`2`) で比較する処理を追加した。食べ直し continuation は「切った後ろの胴体を順に食べるだけ」とし、exact target food への BFS を使って最小実装した。比較は horizon 内の一致数、実際に食べた個数、その時点の absolute score、同点時の食べ直し優先で行う。
+実行:
+- `cargo check`
+- `cargo build --release`
+- `Get-Content in/0000.txt | .\\target\\release\\ahc063.exe > out/0000.release.txt`
+- `Get-Content in/0003.txt | .\\target\\release\\ahc063.exe > out/0003.release.txt`
+結果:
+- コンパイル成功
+- release 実行で `0000` の score JSON は `104`, `stop_reason = "completed"` で据え置き
+- release 実行で `0003` の score JSON は `290720`, `stop_reason = "pre_bite_snapshot"` で据え置き
+- この環境では引き続き `python` / `py` が無く、`simulator.py` による 200 ケース確認は未実施
+考察:
+- bite 後 continuation に「食べ直し」を入れる入口自体は壊れずに追加できた
+- 軽い 2 ケースでは差分が出なかったため、効果判定には 200 ケース再集計が必要
+変更: `plan_greedy_target_inner()` の先頭で `state.colors.len() >= m` を検出したら `None` を返すようにした。`M = k` 状態でも continuation 評価や resume 判定から GreedyTarget に入る経路があり、`d[len]` を読んで panic していたのを防ぐ最小修正。
+実行:
+- `cargo check`
+- `cargo build`
+- `Get-Content in/0100.txt | .\\target\\debug\\ahc063.exe > out/0100.txt`
+結果:
+- コンパイル成功
+- `0100` は panic せず完走し、`score = 172`, `completed = true`, `full_length = true`
+考察:
+- 今回の panic は continuation 評価まわりから `M = k` 状態で GreedyTarget に入れてしまう境界条件バグだった
+- 早期 `None` で十分防げており、通常ケースの `0000` も release 実行で据え置きだった

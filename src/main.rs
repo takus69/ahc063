@@ -12,6 +12,7 @@ const SAFE_BRANCH_ENDGAME_REMAINING_FOOD_LIMIT: usize = 24;
 const SAFE_BRANCH_MIN_SAFE_COLLECT_COUNT: usize = 2;
 const GREEDY_TARGET_CANDIDATE_LIMIT: usize = 3;
 const GREEDY_FALLBACK_CANDIDATE_LIMIT: usize = 3;
+const BITE_CONTINUATION_HORIZON: usize = 2;
 const TARGET_BFS_ORDERS: [[char; 4]; 4] = [
     ['U', 'D', 'L', 'R'],
     ['R', 'D', 'L', 'U'],
@@ -56,6 +57,7 @@ struct Solver {
     stop_reason: &'static str,
 }
 
+#[derive(Clone, Debug)]
 struct SnakeState {
     board: Vec<Vec<usize>>,
     positions: Vec<(usize, usize)>,
@@ -108,6 +110,9 @@ struct GreedyEval {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SafeCollectBiteEval {
     followup_food_collected: bool,
+    continuation_matched_foods: usize,
+    continuation_eaten_foods: usize,
+    continuation_score: usize,
     projected_prefix_len: usize,
     prefix_len: usize,
     next_target_dist: Option<usize>,
@@ -126,6 +131,16 @@ struct SafeCollectRouteEval {
     next_fallback_dist: Option<usize>,
     reachable_cell_count: usize,
     reachable_food_count: usize,
+}
+
+#[derive(Clone, Debug)]
+struct BiteContinuationOutcome {
+    state: SnakeState,
+    matched_foods: usize,
+    eaten_foods: usize,
+    absolute_score: usize,
+    moves_len: usize,
+    used_regrow: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -754,10 +769,12 @@ impl Solver {
         let mut best: Option<(SafeCollectBiteEval, usize, Vec<char>)> = None;
 
         for idx in 2..state.positions.len().saturating_sub(1) {
-            let Some((moves, bitten)) = self.simulate_bite_candidate(state, idx) else {
+            let Some((moves, bitten, dropped_suffix)) =
+                self.simulate_bite_candidate_with_dropped_suffix(state, idx)
+            else {
                 continue;
             };
-            let eval = self.evaluate_safe_collect_bite_candidate(&bitten);
+            let eval = self.evaluate_safe_collect_bite_candidate(&bitten, &dropped_suffix);
             let candidate = (eval, moves.len(), moves);
             if best.as_ref().is_none_or(|current| {
                 self.is_better_safe_collect_bite_candidate(
@@ -774,11 +791,11 @@ impl Solver {
         best.map(|(_, _, moves)| moves)
     }
 
-    fn simulate_bite_candidate(
+    fn simulate_bite_candidate_with_dropped_suffix(
         &self,
         state: &SnakeState,
         idx: usize,
-    ) -> Option<(Vec<char>, SnakeState)> {
+    ) -> Option<(Vec<char>, SnakeState, Vec<((usize, usize), usize)>)> {
         let target = *state.positions.get(idx)?;
         let bfs = self.bfs_reachable_body_target(state, target);
         let moves = bfs.restore_moves(target)?;
@@ -787,23 +804,32 @@ impl Solver {
             positions: state.positions.clone(),
             colors: state.colors.clone(),
         };
-        self.apply_moves(&mut bitten, &moves);
+        let mut dropped_suffix = None;
+        for &op in &moves {
+            dropped_suffix = self.apply_move_with_bite_info(&mut bitten, op).or(dropped_suffix);
+        }
         if bitten.colors.len() >= state.colors.len() {
             return None;
         }
+        Some((moves, bitten, dropped_suffix.unwrap_or_default()))
+    }
+
+    fn simulate_bite_candidate(
+        &self,
+        state: &SnakeState,
+        idx: usize,
+    ) -> Option<(Vec<char>, SnakeState)> {
+        let (moves, bitten, _) = self.simulate_bite_candidate_with_dropped_suffix(state, idx)?;
         Some((moves, bitten))
     }
 
-    fn evaluate_safe_collect_bite_candidate(&self, bitten: &SnakeState) -> SafeCollectBiteEval {
-        let mut followed = SnakeState {
-            board: bitten.board.clone(),
-            positions: bitten.positions.clone(),
-            colors: bitten.colors.clone(),
-        };
-        let zigzag_followup = self.plan_zigzag_safe_collect_moves(bitten);
-        if let Some(moves) = zigzag_followup.as_ref() {
-            self.apply_moves(&mut followed, moves);
-        }
+    fn evaluate_safe_collect_bite_candidate(
+        &self,
+        bitten: &SnakeState,
+        dropped_suffix: &[((usize, usize), usize)],
+    ) -> SafeCollectBiteEval {
+        let continuation = self.choose_bite_continuation(bitten, dropped_suffix);
+        let followed = continuation.state;
 
         let next_target_dist = if followed.colors.len() < self.input.m {
             let next_target_color = self.input.d[followed.colors.len()];
@@ -823,7 +849,10 @@ impl Solver {
         let reexpand_bfs = self.bfs_reachable_first_food(&followed);
 
         SafeCollectBiteEval {
-            followup_food_collected: zigzag_followup.is_some(),
+            followup_food_collected: continuation.eaten_foods > 0,
+            continuation_matched_foods: continuation.matched_foods,
+            continuation_eaten_foods: continuation.eaten_foods,
+            continuation_score: continuation.absolute_score,
             projected_prefix_len: self.project_prefix_after_resume(&followed),
             prefix_len: self.prefix_len(&followed),
             next_target_dist,
@@ -831,7 +860,11 @@ impl Solver {
             reachable_cell_count: reexpand_bfs.reachable_cell_count(),
             reachable_food_count: reexpand_bfs.reachable_food_count(&followed),
             bitten_length: bitten.colors.len(),
-            followup_len: zigzag_followup.as_ref().map_or(usize::MAX, |moves| moves.len()),
+            followup_len: if continuation.eaten_foods > 0 {
+                continuation.moves_len
+            } else {
+                usize::MAX
+            },
         }
     }
 
@@ -844,28 +877,55 @@ impl Solver {
     ) -> bool {
         candidate_eval.followup_food_collected && !current_eval.followup_food_collected
             || (candidate_eval.followup_food_collected == current_eval.followup_food_collected
+                && candidate_eval.continuation_matched_foods > current_eval.continuation_matched_foods)
+            || (candidate_eval.followup_food_collected == current_eval.followup_food_collected
+                && candidate_eval.continuation_matched_foods == current_eval.continuation_matched_foods
+                && candidate_eval.continuation_eaten_foods > current_eval.continuation_eaten_foods)
+            || (candidate_eval.followup_food_collected == current_eval.followup_food_collected
+                && candidate_eval.continuation_matched_foods == current_eval.continuation_matched_foods
+                && candidate_eval.continuation_eaten_foods == current_eval.continuation_eaten_foods
+                && candidate_eval.continuation_score < current_eval.continuation_score)
+            || (candidate_eval.followup_food_collected == current_eval.followup_food_collected
+                && candidate_eval.continuation_matched_foods == current_eval.continuation_matched_foods
+                && candidate_eval.continuation_eaten_foods == current_eval.continuation_eaten_foods
+                && candidate_eval.continuation_score == current_eval.continuation_score
                 && candidate_eval.projected_prefix_len > current_eval.projected_prefix_len)
             || (candidate_eval.followup_food_collected == current_eval.followup_food_collected
+                && candidate_eval.continuation_matched_foods == current_eval.continuation_matched_foods
+                && candidate_eval.continuation_eaten_foods == current_eval.continuation_eaten_foods
+                && candidate_eval.continuation_score == current_eval.continuation_score
                 && candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
                 && candidate_eval.prefix_len > current_eval.prefix_len)
             || (candidate_eval.followup_food_collected == current_eval.followup_food_collected
+                && candidate_eval.continuation_matched_foods == current_eval.continuation_matched_foods
+                && candidate_eval.continuation_eaten_foods == current_eval.continuation_eaten_foods
+                && candidate_eval.continuation_score == current_eval.continuation_score
                 && candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
                 && candidate_eval.prefix_len == current_eval.prefix_len
                 && candidate_eval.next_target_dist.is_some()
                 && current_eval.next_target_dist.is_none())
             || (candidate_eval.followup_food_collected == current_eval.followup_food_collected
+                && candidate_eval.continuation_matched_foods == current_eval.continuation_matched_foods
+                && candidate_eval.continuation_eaten_foods == current_eval.continuation_eaten_foods
+                && candidate_eval.continuation_score == current_eval.continuation_score
                 && candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
                 && candidate_eval.prefix_len == current_eval.prefix_len
                 && candidate_eval.next_target_dist.is_some() == current_eval.next_target_dist.is_some()
                 && candidate_eval.next_target_dist.unwrap_or(usize::MAX)
                     < current_eval.next_target_dist.unwrap_or(usize::MAX))
             || (candidate_eval.followup_food_collected == current_eval.followup_food_collected
+                && candidate_eval.continuation_matched_foods == current_eval.continuation_matched_foods
+                && candidate_eval.continuation_eaten_foods == current_eval.continuation_eaten_foods
+                && candidate_eval.continuation_score == current_eval.continuation_score
                 && candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
                 && candidate_eval.prefix_len == current_eval.prefix_len
                 && candidate_eval.next_target_dist == current_eval.next_target_dist
                 && candidate_eval.next_fallback_dist.is_some()
                 && current_eval.next_fallback_dist.is_none())
             || (candidate_eval.followup_food_collected == current_eval.followup_food_collected
+                && candidate_eval.continuation_matched_foods == current_eval.continuation_matched_foods
+                && candidate_eval.continuation_eaten_foods == current_eval.continuation_eaten_foods
+                && candidate_eval.continuation_score == current_eval.continuation_score
                 && candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
                 && candidate_eval.prefix_len == current_eval.prefix_len
                 && candidate_eval.next_target_dist == current_eval.next_target_dist
@@ -874,12 +934,18 @@ impl Solver {
                 && candidate_eval.next_fallback_dist.unwrap_or(usize::MAX)
                     < current_eval.next_fallback_dist.unwrap_or(usize::MAX))
             || (candidate_eval.followup_food_collected == current_eval.followup_food_collected
+                && candidate_eval.continuation_matched_foods == current_eval.continuation_matched_foods
+                && candidate_eval.continuation_eaten_foods == current_eval.continuation_eaten_foods
+                && candidate_eval.continuation_score == current_eval.continuation_score
                 && candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
                 && candidate_eval.prefix_len == current_eval.prefix_len
                 && candidate_eval.next_target_dist == current_eval.next_target_dist
                 && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
                 && candidate_eval.reachable_food_count > current_eval.reachable_food_count)
             || (candidate_eval.followup_food_collected == current_eval.followup_food_collected
+                && candidate_eval.continuation_matched_foods == current_eval.continuation_matched_foods
+                && candidate_eval.continuation_eaten_foods == current_eval.continuation_eaten_foods
+                && candidate_eval.continuation_score == current_eval.continuation_score
                 && candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
                 && candidate_eval.prefix_len == current_eval.prefix_len
                 && candidate_eval.next_target_dist == current_eval.next_target_dist
@@ -887,6 +953,9 @@ impl Solver {
                 && candidate_eval.reachable_food_count == current_eval.reachable_food_count
                 && candidate_eval.reachable_cell_count > current_eval.reachable_cell_count)
             || (candidate_eval.followup_food_collected == current_eval.followup_food_collected
+                && candidate_eval.continuation_matched_foods == current_eval.continuation_matched_foods
+                && candidate_eval.continuation_eaten_foods == current_eval.continuation_eaten_foods
+                && candidate_eval.continuation_score == current_eval.continuation_score
                 && candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
                 && candidate_eval.prefix_len == current_eval.prefix_len
                 && candidate_eval.next_target_dist == current_eval.next_target_dist
@@ -895,6 +964,9 @@ impl Solver {
                 && candidate_eval.reachable_cell_count == current_eval.reachable_cell_count
                 && candidate_eval.bitten_length > current_eval.bitten_length)
             || (candidate_eval.followup_food_collected == current_eval.followup_food_collected
+                && candidate_eval.continuation_matched_foods == current_eval.continuation_matched_foods
+                && candidate_eval.continuation_eaten_foods == current_eval.continuation_eaten_foods
+                && candidate_eval.continuation_score == current_eval.continuation_score
                 && candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
                 && candidate_eval.prefix_len == current_eval.prefix_len
                 && candidate_eval.next_target_dist == current_eval.next_target_dist
@@ -904,6 +976,131 @@ impl Solver {
                 && candidate_eval.bitten_length == current_eval.bitten_length
                 && candidate_eval.followup_len < current_eval.followup_len)
             || (candidate_eval == current_eval && candidate_moves_len < current_moves_len)
+    }
+
+    fn choose_bite_continuation(
+        &self,
+        bitten: &SnakeState,
+        dropped_suffix: &[((usize, usize), usize)],
+    ) -> BiteContinuationOutcome {
+        let greedy = self.simulate_greedy_bite_continuation(bitten, BITE_CONTINUATION_HORIZON);
+        let regrow = self.simulate_regrow_bite_continuation(
+            bitten,
+            dropped_suffix,
+            BITE_CONTINUATION_HORIZON,
+        );
+        if self.is_better_bite_continuation(&regrow, &greedy) {
+            regrow
+        } else {
+            greedy
+        }
+    }
+
+    fn simulate_greedy_bite_continuation(
+        &self,
+        bitten: &SnakeState,
+        horizon: usize,
+    ) -> BiteContinuationOutcome {
+        let mut state = SnakeState {
+            board: bitten.board.clone(),
+            positions: bitten.positions.clone(),
+            colors: bitten.colors.clone(),
+        };
+        let mut matched_foods = 0;
+        let mut eaten_foods = 0;
+        let mut moves_len = 0;
+
+        while eaten_foods < horizon && state.colors.len() < self.input.m {
+            let plan = self
+                .plan_greedy_target_inner(&state)
+                .map(|(plan, _, _, _)| plan)
+                .or_else(|| self.plan_greedy_fallback_inner(&state).map(|(plan, _, _)| plan));
+            let Some(plan) = plan else {
+                break;
+            };
+            let expected_idx = state.colors.len();
+            self.apply_moves(&mut state, &plan.moves);
+            if state.colors.len() <= expected_idx {
+                break;
+            }
+            moves_len += plan.moves.len();
+            if state.colors[expected_idx] == self.input.d[expected_idx] {
+                matched_foods += 1;
+            }
+            eaten_foods += 1;
+        }
+
+        BiteContinuationOutcome {
+            absolute_score: self.absolute_score(&state, moves_len),
+            state,
+            matched_foods,
+            eaten_foods,
+            moves_len,
+            used_regrow: false,
+        }
+    }
+
+    fn simulate_regrow_bite_continuation(
+        &self,
+        bitten: &SnakeState,
+        dropped_suffix: &[((usize, usize), usize)],
+        horizon: usize,
+    ) -> BiteContinuationOutcome {
+        let mut state = SnakeState {
+            board: bitten.board.clone(),
+            positions: bitten.positions.clone(),
+            colors: bitten.colors.clone(),
+        };
+        let mut matched_foods = 0;
+        let mut eaten_foods = 0;
+        let mut moves_len = 0;
+
+        for &((i, j), color) in dropped_suffix.iter().take(horizon) {
+            if state.board[i][j] != color {
+                break;
+            }
+            let bfs = self.bfs_reachable_food_target_cell(&state, (i, j));
+            let Some(moves) = bfs.restore_moves((i, j)) else {
+                break;
+            };
+            let expected_idx = state.colors.len();
+            self.apply_moves(&mut state, &moves);
+            if state.colors.len() <= expected_idx {
+                break;
+            }
+            moves_len += moves.len();
+            if state.colors[expected_idx] == self.input.d[expected_idx] {
+                matched_foods += 1;
+            }
+            eaten_foods += 1;
+        }
+
+        BiteContinuationOutcome {
+            absolute_score: self.absolute_score(&state, moves_len),
+            state,
+            matched_foods,
+            eaten_foods,
+            moves_len,
+            used_regrow: true,
+        }
+    }
+
+    fn is_better_bite_continuation(
+        &self,
+        candidate: &BiteContinuationOutcome,
+        current: &BiteContinuationOutcome,
+    ) -> bool {
+        candidate.matched_foods > current.matched_foods
+            || (candidate.matched_foods == current.matched_foods
+                && candidate.eaten_foods > current.eaten_foods)
+            || (candidate.matched_foods == current.matched_foods
+                && candidate.eaten_foods == current.eaten_foods
+                && candidate.absolute_score < current.absolute_score)
+            || (candidate.matched_foods == current.matched_foods
+                && candidate.eaten_foods == current.eaten_foods
+                && candidate.absolute_score == current.absolute_score
+                && candidate.used_regrow
+                && !current.used_regrow)
     }
 
     fn project_prefix_after_resume(&self, state: &SnakeState) -> usize {
@@ -938,6 +1135,9 @@ impl Solver {
         &self,
         state: &SnakeState,
     ) -> Option<(Plan, BfsResult, FoodTarget, usize)> {
+        if state.colors.len() >= self.input.m {
+            return None;
+        }
         let target_color = self.input.d[state.colors.len()];
         let primary_bfs =
             self.bfs_reachable_target_color_with_order(state, target_color, &TARGET_BFS_ORDERS[0]);
@@ -1683,6 +1883,60 @@ impl Solver {
         self.bfs_reachable_target_color_with_order(state, target_color, &TARGET_BFS_ORDERS[0])
     }
 
+    fn bfs_reachable_food_target_cell(
+        &self,
+        state: &SnakeState,
+        target: (usize, usize),
+    ) -> BfsResult {
+        let start = state.positions[0];
+        let mut result = BfsResult::new(self.input.n, start);
+        let mut cell_open_turn = self.build_cell_open_turn(state);
+        let mut queue = VecDeque::new();
+
+        for i in 0..self.input.n {
+            for j in 0..self.input.n {
+                if state.board[i][j] != 0 && (i, j) != target {
+                    cell_open_turn[i][j] = usize::MAX;
+                }
+            }
+        }
+
+        result.reachable[start.0][start.1] = true;
+        result.dist[start.0][start.1] = Some(0);
+        queue.push_back(start);
+
+        while let Some(current) = queue.pop_front() {
+            let current_dist =
+                result.dist[current.0][current.1].expect("visited cell must have distance");
+
+            if current == target {
+                continue;
+            }
+
+            for &op in &TARGET_BFS_ORDERS[0] {
+                let Some(next) = self.try_advance(current, op) else {
+                    continue;
+                };
+                let arrival_turn = current_dist + 1;
+                let still_occupied = cell_open_turn[next.0][next.1] > arrival_turn;
+                if still_occupied || result.reachable[next.0][next.1] {
+                    continue;
+                }
+
+                result.reachable[next.0][next.1] = true;
+                result.dist[next.0][next.1] = Some(arrival_turn);
+                result.parent[next.0][next.1] = Some(current);
+                result.parent_move[next.0][next.1] = Some(op);
+                if next == target {
+                    return result;
+                }
+                queue.push_back(next);
+            }
+        }
+
+        result
+    }
+
     fn bfs_reachable_target_color_with_order(
         &self,
         state: &SnakeState,
@@ -1868,6 +2122,43 @@ impl Solver {
             state.positions.truncate(h + 1);
             state.colors.truncate(h + 1);
         }
+    }
+
+    fn apply_move_with_bite_info(
+        &self,
+        state: &mut SnakeState,
+        op: char,
+    ) -> Option<Vec<((usize, usize), usize)>> {
+        let next_head = self.advance(state.positions[0], op);
+        let previous_tail = *state.positions.last().expect("snake must be non-empty");
+
+        state.positions.insert(0, next_head);
+        state.positions.pop();
+
+        let food = state.board[next_head.0][next_head.1];
+        if food != 0 {
+            state.board[next_head.0][next_head.1] = 0;
+            state.positions.push(previous_tail);
+            state.colors.push(food);
+            return None;
+        }
+
+        if let Some(h) = (1..state.positions.len().saturating_sub(1))
+            .find(|&idx| state.positions[idx] == next_head)
+        {
+            let dropped_suffix = ((h + 1)..state.positions.len())
+                .map(|idx| (state.positions[idx], state.colors[idx]))
+                .collect::<Vec<_>>();
+            for idx in (h + 1)..state.positions.len() {
+                let (i, j) = state.positions[idx];
+                state.board[i][j] = state.colors[idx];
+            }
+            state.positions.truncate(h + 1);
+            state.colors.truncate(h + 1);
+            return Some(dropped_suffix);
+        }
+
+        None
     }
 
     fn advance(&self, from: (usize, usize), op: char) -> (usize, usize) {

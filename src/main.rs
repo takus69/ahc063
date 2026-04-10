@@ -12,6 +12,9 @@ const SAFE_BRANCH_ENDGAME_REMAINING_FOOD_LIMIT: usize = 24;
 const SAFE_BRANCH_MIN_SAFE_COLLECT_COUNT: usize = 2;
 const GREEDY_TARGET_CANDIDATE_LIMIT: usize = 3;
 const GREEDY_FALLBACK_CANDIDATE_LIMIT: usize = 3;
+const ENDGAME_NO_BITE_REMAINING_FOOD_LIMIT: usize = 8;
+const TARGETED_REPAIR_MAX_MISMATCH: usize = 3;
+const TARGETED_REPAIR_MAX_REMAINING_WRONG_TAIL: usize = 10;
 const BITE_CONTINUATION_HORIZON: usize = 2;
 const TARGET_BFS_ORDERS: [[char; 4]; 4] = [
     ['U', 'D', 'L', 'R'],
@@ -602,10 +605,12 @@ impl Solver {
                 .or_else(|| self.plan_forced_safe_collect_bite(state))?;
             (moves, false)
         } else {
+            let no_bite_finish = self.plan_endgame_no_bite_finish(state);
             let no_bite_retry = self.plan_pre_bite_no_bite_continuation(state);
             let bite_moves = self.plan_safe_collect_bfs_bite(state);
-            let resume_greedy_after_apply = no_bite_retry.is_some() || bite_moves.is_some();
-            let moves = no_bite_retry
+            let resume_greedy_after_apply = no_bite_finish.is_some() || no_bite_retry.is_some() || bite_moves.is_some();
+            let moves = no_bite_finish
+                .or(no_bite_retry)
                 .or(bite_moves)
                 .or_else(|| self.plan_zigzag_safe_collect_moves(state))
                 .or_else(|| self.plan_greedy_fallback_inner(state).map(|(plan, _, _)| plan.moves))?;
@@ -619,6 +624,10 @@ impl Solver {
     }
 
     fn plan_pre_bite_no_bite_continuation(&self, state: &SnakeState) -> Option<Vec<char>> {
+        if let Some(moves) = self.plan_endgame_no_bite_finish(state) {
+            return Some(moves);
+        }
+
         if let Some((plan, _, _, _)) = self.plan_greedy_target_inner(state) {
             let eval = self.evaluate_greedy_target_candidate(state, &plan.moves);
             if eval.consecutive_target_hits > 0
@@ -639,14 +648,45 @@ impl Solver {
         None
     }
 
-    fn plan_bite_rebuild(&self, state: &SnakeState) -> Option<Plan> {
-        if let Some(plan) = self.plan_targeted_suffix_repair(state) {
-            return Some(plan);
+    fn plan_endgame_no_bite_finish(&self, state: &SnakeState) -> Option<Vec<char>> {
+        if state.colors.len() >= self.input.m {
+            return None;
+        }
+        if self.remaining_food_count(state) > ENDGAME_NO_BITE_REMAINING_FOOD_LIMIT {
+            return None;
         }
 
-        let mismatch = self.current_mismatch_count(state).unwrap_or(usize::MAX);
-        if state.colors.len() == self.input.m && mismatch <= 8 {
-            return None;
+        let mut simulated = SnakeState {
+            board: state.board.clone(),
+            positions: state.positions.clone(),
+            colors: state.colors.clone(),
+        };
+        let mut ops = Vec::new();
+
+        while simulated.colors.len() < self.input.m {
+            let plan = self
+                .plan_greedy_target_inner(&simulated)
+                .map(|(plan, _, _, _)| plan)
+                .or_else(|| self.plan_greedy_fallback_inner(&simulated).map(|(plan, _, _)| plan));
+            let Some(plan) = plan else {
+                return None;
+            };
+            let len_before = simulated.colors.len();
+            self.apply_moves(&mut simulated, &plan.moves);
+            if simulated.colors.len() <= len_before {
+                return None;
+            }
+            ops.extend(plan.moves);
+        }
+
+        Some(ops)
+    }
+
+    fn plan_bite_rebuild(&self, state: &SnakeState) -> Option<Plan> {
+        if self.should_try_targeted_suffix_repair(state) {
+            if let Some(plan) = self.plan_targeted_suffix_repair(state) {
+                return Some(plan);
+            }
         }
 
         self.plan_bite_rebuild_fallback(state)
@@ -825,7 +865,7 @@ impl Solver {
         }
 
         let (eval, _, moves) = best?;
-        if !eval.can_reach_want {
+        if !eval.kept_prefix_exact || !eval.can_reach_want || !eval.can_extend_prefix_after_want {
             return None;
         }
 
@@ -898,6 +938,19 @@ impl Solver {
                 .filter(|(actual, desired)| actual != desired)
                 .count(),
         )
+    }
+
+    fn should_try_targeted_suffix_repair(&self, state: &SnakeState) -> bool {
+        if state.colors.len() != self.input.m {
+            return false;
+        }
+        let p = self.prefix_len(state);
+        if p >= self.input.m {
+            return false;
+        }
+        let mismatch = self.current_mismatch_count(state).unwrap_or(usize::MAX);
+        mismatch <= TARGETED_REPAIR_MAX_MISMATCH
+            && self.input.m.saturating_sub(p) <= TARGETED_REPAIR_MAX_REMAINING_WRONG_TAIL
     }
 
     fn best_exit_eval_after_bite(&self, bitten: &SnakeState, want: usize) -> ExitEval {

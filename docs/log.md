@@ -827,3 +827,17 @@
 考察:
 - これで visualizer 側では `debug_main_ans.txt` を読めば best snapshot 採用前の本線挙動を確認できる
 - `0000` では差分が出なかったので、main と final answer が分かれる seed で確認すると価値が高い
+変更: 共通 `is_better_greedy_candidate()` の比較順を調整し、`GreedyTarget` / `GreedyFallback` の両方で `moves.len()` を今より前に見るようにした。連続一致や next target/fallback 可否は維持したまま、reachable 系や `prefix_len` より先に短い plan を優先して、遠回りをやや不利にした。
+実行:
+- `cargo check`
+- `cargo build --release`
+- `Get-Content in/0000.txt | .\\target\\release\\ahc063.exe > out/0000.release.txt`
+- `Get-Content in/0003.txt | .\\target\\release\\ahc063.exe > out/0003.release.txt`
+結果:
+- コンパイル成功
+- release 実行で `0000` の score JSON は `104`, `stop_reason = "completed"`
+- release 実行で `0003` の score JSON は `290720`, `stop_reason = "pre_bite_snapshot"`
+- 軽い 2 ケース確認では score 差分は出なかった
+考察:
+- 今回の変更は評価バランスの微調整なので、効果は 200 ケース集計で見ないと判断しにくい
+- この環境では `simulator.py` を回す Python が無いため、200 ケース確認は手元環境での再実行が必要

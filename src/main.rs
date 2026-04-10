@@ -1026,6 +1026,11 @@ impl Solver {
                         && candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
                         && candidate_eval.next_target_dist == current_eval.next_target_dist
                         && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
+                        && candidate_moves_len < current_moves_len)
+                    || (candidate_eval.consecutive_target_hits_3 == current_eval.consecutive_target_hits_3
+                        && candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
+                        && candidate_eval.next_target_dist == current_eval.next_target_dist
+                        && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
                         && candidate_eval.reachable_food_count > current_eval.reachable_food_count)
                     || (candidate_eval.consecutive_target_hits_3 == current_eval.consecutive_target_hits_3
                         && candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
@@ -1064,11 +1069,10 @@ impl Solver {
                             < current_eval.next_fallback_dist.unwrap_or(usize::MAX))
                     || (candidate_eval.next_target_dist == current_eval.next_target_dist
                         && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
-                        && candidate_eval.prefix_len > current_eval.prefix_len)
+                        && candidate_moves_len < current_moves_len)
                     || (candidate_eval.next_target_dist == current_eval.next_target_dist
                         && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
-                        && candidate_eval.prefix_len == current_eval.prefix_len
-                        && candidate_moves_len < current_moves_len)
+                        && candidate_eval.prefix_len > current_eval.prefix_len)
             }
             _ => false,
         }

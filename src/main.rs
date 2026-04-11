@@ -228,6 +228,7 @@ struct Plan {
     phase: Phase,
     moves: Vec<char>,
     resume_greedy_after_apply: bool,
+    contains_bite: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -311,11 +312,12 @@ impl Solver {
                 break;
             }
 
-            if self.plan_contains_bite(&state, &plan.moves) {
+            if plan.contains_bite {
                 if let Some(no_bite_moves) = self.plan_pre_bite_no_bite_continuation(&state) {
                     if !self.plan_contains_bite(&state, &no_bite_moves) {
                         plan.moves = no_bite_moves;
                         plan.resume_greedy_after_apply = true;
+                        plan.contains_bite = false;
                     }
                 }
             }
@@ -328,7 +330,7 @@ impl Solver {
                 self.safe_collect_count += 1;
             }
 
-            if self.plan_contains_bite(&state, &plan.moves) {
+            if plan.contains_bite {
                 let mut stats = self.current_output_stats(false);
                 stats.stop_reason = "pre_bite_snapshot";
                 self.update_best_snapshot(&self.ops.clone(), stats);
@@ -750,6 +752,7 @@ impl Solver {
             phase: Phase::GreedyTarget,
             moves,
             resume_greedy_after_apply: false,
+            contains_bite: true,
         })
     }
 
@@ -836,8 +839,9 @@ impl Solver {
         };
         Some(Plan {
             phase: Phase::SafeCollect,
-            moves,
+            moves: moves.clone(),
             resume_greedy_after_apply,
+            contains_bite: self.plan_contains_bite(state, &moves),
         })
     }
 
@@ -1073,6 +1077,7 @@ impl Solver {
             phase: Phase::BiteRebuild,
             moves,
             resume_greedy_after_apply: false,
+            contains_bite: true,
         })
     }
 
@@ -1162,6 +1167,7 @@ impl Solver {
             phase: Phase::BiteRebuild,
             moves,
             resume_greedy_after_apply: false,
+            contains_bite: true,
         })
     }
 
@@ -1382,6 +1388,7 @@ impl Solver {
             phase: Phase::BiteRebuild,
             moves,
             resume_greedy_after_apply: false,
+            contains_bite: true,
         })
     }
 
@@ -1991,6 +1998,7 @@ impl Solver {
                 phase: Phase::SafeCollect,
                 moves,
                 resume_greedy_after_apply: false,
+                contains_bite: false,
             }));
 
         if let Some(plan) = plan {
@@ -2052,6 +2060,7 @@ impl Solver {
                         phase: Phase::GreedyTarget,
                         moves,
                         resume_greedy_after_apply: false,
+                        contains_bite: false,
                     },
                     bfs.clone(),
                     target,
@@ -2374,6 +2383,7 @@ impl Solver {
                         phase: Phase::GreedyFallback,
                         moves,
                         resume_greedy_after_apply: false,
+                        contains_bite: false,
                     },
                     bfs.clone(),
                     target,

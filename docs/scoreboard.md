@@ -165,6 +165,7 @@ E[E | M = k] ≒ 70.33 * 0.78143 ≒ 54.96
 
 | 日付 | local | submit | 順位 | 概要 |
 | --- | ---: | ---: | ---: | --- |
+| 2026-04-11 | 5,659,436 | 4,164,155 | 284 | k < M 専用の前段ループを追加し、GreedyTarget / GreedyFallback / BiteRestoreTail で先に長さを作る方針を導入 |
 | 2026-04-11 | 4,857,962 | 3,058,257 | 266 | `RestartBiteForTarget` を `GreedyTarget` より優先し、prefix 内 bite の replay を強制する方針で `completed = 140 / 200`、`full_length = 173 / 200` まで大幅改善。提出も大きく改善したが、順位の伸びは限定的だった |
 | 2026-04-11 | 5,856,946 | 6,185,033 | 283 | 食べ直し continuation を bite 後比較へ追加し、still-good 群の `E` と `T` をさらに改善したが、提出 50 ケースでは悪化 |
 | 2026-04-11 | 6,549,798 | 6,031,751 | 263 | 食べ直し評価の導入で completed をさらに増やし、safe_branch_full_length を減らしたが、提出スコア自体は据え置き |

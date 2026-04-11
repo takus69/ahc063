@@ -866,3 +866,16 @@
 考察:
 - 今回の panic は continuation 評価まわりから `M = k` 状態で GreedyTarget に入れてしまう境界条件バグだった
 - 早期 `None` で十分防げており、通常ケースの `0000` も release 実行で据え置きだった
+変更: `GreedyTarget` の連続一致評価に `consecutive_target_total_dist` を追加し、3手先/2手先の連続一致数が同じ候補では、次の1個への距離より先に「連続一致で実際に食べる合計距離」が短い方を優先するようにした。
+実行:
+- `cargo check`
+- `cargo build --release`
+- `Get-Content in/0000.txt | .\\target\\release\\ahc063.exe > out/0000.release.txt`
+- `Get-Content in/0086.txt | .\\target\\release\\ahc063.exe > out/0086.release.txt`
+結果:
+- コンパイル成功
+- release 実行で `0000` の score JSON は `116`, `stop_reason = "completed"`（以前の `104` から悪化）
+- release 実行で `0086` の score JSON は `90`, `stop_reason = "completed"`（以前の `96` から改善）
+考察:
+- `0086` では近い一致餌列を優先する方向に効いた
+- 一方で `0000` は悪化しており、連続一致の合計距離を前に出しすぎると局面によっては future-aware な遠回りの利点を削る可能性がある

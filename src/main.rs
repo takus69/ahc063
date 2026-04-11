@@ -179,6 +179,12 @@ struct ProgressSnapshot {
     is_stalled: bool,
 }
 
+#[derive(Clone, Debug)]
+struct QueuedState {
+    state: SnakeState,
+    ops: Vec<char>,
+}
+
 impl Solver {
     fn new(seed: u64, start: Instant, input: Input) -> Self {
         let rng = StdRng::seed_from_u64(seed);
@@ -217,6 +223,7 @@ impl Solver {
 
         self.run_build_full_length_phase();
         let mut state = self.initial_state();
+        let mut queued_states: Vec<QueuedState> = Vec::new();
 
         loop {
             if self.should_stop(&state) {
@@ -244,11 +251,27 @@ impl Solver {
                 let mut stats = self.current_output_stats(false);
                 stats.stop_reason = "no_plan_snapshot";
                 self.update_best_snapshot(&self.ops.clone(), stats);
+                if let Some(best) = self.pop_best_queued_state(&mut queued_states) {
+                    state = best.state;
+                    self.ops = best.ops;
+                    self.last_progress = None;
+                    self.safe_collect_active = false;
+                    self.previous_phase = None;
+                    continue;
+                }
                 self.stop_reason = "no_plan";
                 break;
             };
 
             if plan.moves.is_empty() {
+                if let Some(best) = self.pop_best_queued_state(&mut queued_states) {
+                    state = best.state;
+                    self.ops = best.ops;
+                    self.last_progress = None;
+                    self.safe_collect_active = false;
+                    self.previous_phase = None;
+                    continue;
+                }
                 self.stop_reason = "empty_plan";
                 break;
             }
@@ -261,10 +284,17 @@ impl Solver {
                 self.safe_collect_count += 1;
             }
 
-            if self.plan_contains_bite(&state, &plan.moves) {
+            if let Some((bitten_state, bite_used_moves)) = self.capture_first_bite_state(&state, &plan.moves) {
                 let mut stats = self.current_output_stats(false);
                 stats.stop_reason = "pre_bite_snapshot";
                 self.update_best_snapshot(&self.ops.clone(), stats);
+
+                let mut bite_ops = self.ops.clone();
+                bite_ops.extend(plan.moves.iter().take(bite_used_moves).copied());
+                queued_states.push(QueuedState {
+                    state: bitten_state,
+                    ops: bite_ops,
+                });
             }
 
             let length_before = state.colors.len();
@@ -313,6 +343,7 @@ impl Solver {
     fn run_build_full_length_phase(&mut self) {
         let mut state = self.initial_state();
         let mut ops = Vec::new();
+        let mut queued_states: Vec<QueuedState> = Vec::new();
 
         while state.colors.len() < self.input.m
             && ops.len() < 100000
@@ -328,16 +359,33 @@ impl Solver {
                     resume_greedy_after_apply: false,
                 }));
             let Some(plan) = plan else {
+                if let Some(best) = self.pop_best_queued_state(&mut queued_states) {
+                    state = best.state;
+                    ops = best.ops;
+                    continue;
+                }
                 break;
             };
             if plan.moves.is_empty() {
+                if let Some(best) = self.pop_best_queued_state(&mut queued_states) {
+                    state = best.state;
+                    ops = best.ops;
+                    continue;
+                }
                 break;
             }
 
-            if self.plan_contains_bite(&state, &plan.moves) {
+            if let Some((bitten_state, bite_used_moves)) = self.capture_first_bite_state(&state, &plan.moves) {
                 let mut stats = self.current_output_stats(false);
                 stats.stop_reason = "pre_bite_snapshot";
                 self.update_best_snapshot(&ops, stats);
+
+                let mut bite_ops = ops.clone();
+                bite_ops.extend(plan.moves.iter().take(bite_used_moves).copied());
+                queued_states.push(QueuedState {
+                    state: bitten_state,
+                    ops: bite_ops,
+                });
             }
 
             let length_before = state.colors.len();
@@ -413,6 +461,65 @@ impl Solver {
             }
         }
 
+        None
+    }
+
+
+    fn current_effective_error(&self, state: &SnakeState) -> usize {
+        let mismatch = state
+            .colors
+            .iter()
+            .zip(self.input.d.iter())
+            .filter(|(actual, desired)| actual != desired)
+            .count();
+        mismatch + 2 * (self.input.m - state.colors.len())
+    }
+
+    fn is_better_queued_state(&self, candidate: &QueuedState, current: &QueuedState) -> bool {
+        let cp = self.prefix_len(&candidate.state);
+        let bp = self.prefix_len(&current.state);
+        cp > bp
+            || (cp == bp
+                && self.current_effective_error(&candidate.state)
+                    < self.current_effective_error(&current.state))
+            || (cp == bp
+                && self.current_effective_error(&candidate.state)
+                    == self.current_effective_error(&current.state)
+                && candidate.state.colors.len() < current.state.colors.len())
+            || (cp == bp
+                && self.current_effective_error(&candidate.state)
+                    == self.current_effective_error(&current.state)
+                && candidate.state.colors.len() == current.state.colors.len()
+                && candidate.ops.len() < current.ops.len())
+    }
+
+    fn pop_best_queued_state(&self, queued_states: &mut Vec<QueuedState>) -> Option<QueuedState> {
+        let mut best_idx = None;
+        for i in 0..queued_states.len() {
+            if best_idx.is_none_or(|best| self.is_better_queued_state(&queued_states[i], &queued_states[best])) {
+                best_idx = Some(i);
+            }
+        }
+        best_idx.map(|idx| queued_states.swap_remove(idx))
+    }
+
+    fn capture_first_bite_state(
+        &self,
+        state: &SnakeState,
+        moves: &[char],
+    ) -> Option<(SnakeState, usize)> {
+        let mut simulated = SnakeState {
+            board: state.board.clone(),
+            positions: state.positions.clone(),
+            colors: state.colors.clone(),
+        };
+        for (idx, &op) in moves.iter().enumerate() {
+            let len_before = simulated.colors.len();
+            self.apply_move(&mut simulated, op);
+            if simulated.colors.len() < len_before {
+                return Some((simulated, idx + 1));
+            }
+        }
         None
     }
 

@@ -114,6 +114,7 @@ struct GreedyEval {
     projected_prefix_len: usize,
     projected_final_length: usize,
     projected_matched_target_hits: usize,
+    post_bite_target_dist: Option<usize>,
     next_target_dist: Option<usize>,
     next_fallback_dist: Option<usize>,
     reachable_cell_count: usize,
@@ -2118,6 +2119,27 @@ impl Solver {
                         && candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
                         && candidate_eval.projected_final_length == current_eval.projected_final_length
                         && candidate_eval.projected_matched_target_hits == current_eval.projected_matched_target_hits
+                        && candidate_eval.post_bite_target_dist.is_some()
+                        && current_eval.post_bite_target_dist.is_none())
+                    || (candidate_eval.consecutive_target_hits_3 == current_eval.consecutive_target_hits_3
+                        && candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
+                        && candidate_eval.consecutive_target_total_dist
+                            == current_eval.consecutive_target_total_dist
+                        && candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
+                        && candidate_eval.projected_final_length == current_eval.projected_final_length
+                        && candidate_eval.projected_matched_target_hits == current_eval.projected_matched_target_hits
+                        && candidate_eval.post_bite_target_dist.is_some()
+                            == current_eval.post_bite_target_dist.is_some()
+                        && candidate_eval.post_bite_target_dist.unwrap_or(usize::MAX)
+                            < current_eval.post_bite_target_dist.unwrap_or(usize::MAX))
+                    || (candidate_eval.consecutive_target_hits_3 == current_eval.consecutive_target_hits_3
+                        && candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
+                        && candidate_eval.consecutive_target_total_dist
+                            == current_eval.consecutive_target_total_dist
+                        && candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
+                        && candidate_eval.projected_final_length == current_eval.projected_final_length
+                        && candidate_eval.projected_matched_target_hits == current_eval.projected_matched_target_hits
+                        && candidate_eval.post_bite_target_dist == current_eval.post_bite_target_dist
                         && candidate_eval.next_target_dist.is_some()
                         && current_eval.next_target_dist.is_none())
                     || (candidate_eval.consecutive_target_hits_3 == current_eval.consecutive_target_hits_3
@@ -2127,6 +2149,7 @@ impl Solver {
                         && candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
                         && candidate_eval.projected_final_length == current_eval.projected_final_length
                         && candidate_eval.projected_matched_target_hits == current_eval.projected_matched_target_hits
+                        && candidate_eval.post_bite_target_dist == current_eval.post_bite_target_dist
                         && candidate_eval.next_target_dist.is_some() == current_eval.next_target_dist.is_some()
                         && candidate_eval.next_target_dist.unwrap_or(usize::MAX)
                             < current_eval.next_target_dist.unwrap_or(usize::MAX))
@@ -2137,6 +2160,7 @@ impl Solver {
                         && candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
                         && candidate_eval.projected_final_length == current_eval.projected_final_length
                         && candidate_eval.projected_matched_target_hits == current_eval.projected_matched_target_hits
+                        && candidate_eval.post_bite_target_dist == current_eval.post_bite_target_dist
                         && candidate_eval.next_target_dist == current_eval.next_target_dist
                         && candidate_eval.next_fallback_dist.is_some()
                         && current_eval.next_fallback_dist.is_none())
@@ -2147,6 +2171,7 @@ impl Solver {
                         && candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
                         && candidate_eval.projected_final_length == current_eval.projected_final_length
                         && candidate_eval.projected_matched_target_hits == current_eval.projected_matched_target_hits
+                        && candidate_eval.post_bite_target_dist == current_eval.post_bite_target_dist
                         && candidate_eval.next_target_dist == current_eval.next_target_dist
                         && candidate_eval.next_fallback_dist.is_some() == current_eval.next_fallback_dist.is_some()
                         && candidate_eval.next_fallback_dist.unwrap_or(usize::MAX)
@@ -2158,6 +2183,7 @@ impl Solver {
                         && candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
                         && candidate_eval.projected_final_length == current_eval.projected_final_length
                         && candidate_eval.projected_matched_target_hits == current_eval.projected_matched_target_hits
+                        && candidate_eval.post_bite_target_dist == current_eval.post_bite_target_dist
                         && candidate_eval.next_target_dist == current_eval.next_target_dist
                         && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
                         && candidate_eval.reachable_food_count > current_eval.reachable_food_count)
@@ -2168,6 +2194,7 @@ impl Solver {
                         && candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
                         && candidate_eval.projected_final_length == current_eval.projected_final_length
                         && candidate_eval.projected_matched_target_hits == current_eval.projected_matched_target_hits
+                        && candidate_eval.post_bite_target_dist == current_eval.post_bite_target_dist
                         && candidate_eval.next_target_dist == current_eval.next_target_dist
                         && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
                         && candidate_eval.reachable_food_count == current_eval.reachable_food_count
@@ -2179,6 +2206,7 @@ impl Solver {
                         && candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
                         && candidate_eval.projected_final_length == current_eval.projected_final_length
                         && candidate_eval.projected_matched_target_hits == current_eval.projected_matched_target_hits
+                        && candidate_eval.post_bite_target_dist == current_eval.post_bite_target_dist
                         && candidate_eval.next_target_dist == current_eval.next_target_dist
                         && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
                         && candidate_eval.reachable_food_count == current_eval.reachable_food_count
@@ -2191,6 +2219,7 @@ impl Solver {
                         && candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
                         && candidate_eval.projected_final_length == current_eval.projected_final_length
                         && candidate_eval.projected_matched_target_hits == current_eval.projected_matched_target_hits
+                        && candidate_eval.post_bite_target_dist == current_eval.post_bite_target_dist
                         && candidate_eval.next_target_dist == current_eval.next_target_dist
                         && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
                         && candidate_eval.reachable_food_count == current_eval.reachable_food_count
@@ -2315,6 +2344,41 @@ impl Solver {
         (self.prefix_len(&simulated), simulated.colors.len(), matched_target_hits)
     }
 
+    fn evaluate_post_bite_target_dist(&self, state: &SnakeState) -> Option<usize> {
+        if state.colors.len() >= self.input.m {
+            return Some(0);
+        }
+        let mut best: Option<usize> = None;
+        let max_idx = state.positions.len().saturating_sub(2).min(5);
+        for idx in 2..=max_idx {
+            let Some((_, bitten, dropped_suffix)) =
+                self.simulate_bite_candidate_with_dropped_suffix(state, idx)
+            else {
+                continue;
+            };
+            let continued = self.simulate_regrow_bite_continuation(
+                &bitten,
+                &dropped_suffix,
+                BITE_CONTINUATION_HORIZON,
+            );
+            let after = &continued.state;
+            let dist = if after.colors.len() < self.input.m {
+                let next_target_color = self.input.d[after.colors.len()];
+                let bfs = self.bfs_reachable_target_color(after, next_target_color);
+                self.choose_nearest_food_of_color(after, &bfs, next_target_color)
+                    .map(|target| target.dist)
+            } else {
+                Some(0)
+            };
+            if let Some(dist) = dist {
+                if best.is_none_or(|current| dist < current) {
+                    best = Some(dist);
+                }
+            }
+        }
+        best
+    }
+
     fn build_greedy_eval_with_bfs(
         &self,
         next_state: &SnakeState,
@@ -2329,6 +2393,7 @@ impl Solver {
         };
         let (projected_prefix_len, projected_final_length, projected_matched_target_hits) =
             self.project_prefix_frontier(next_state, GREEDY_PROJECT_HORIZON);
+        let post_bite_target_dist = self.evaluate_post_bite_target_dist(next_state);
         let next_target_dist = if next_state.colors.len() < self.input.m {
             let next_target_color = self.input.d[next_state.colors.len()];
             let next_bfs = next_target_bfs.expect("target bfs must exist when snake is not full");
@@ -2351,6 +2416,7 @@ impl Solver {
             projected_prefix_len,
             projected_final_length,
             projected_matched_target_hits,
+            post_bite_target_dist,
             next_target_dist,
             next_fallback_dist,
             reachable_cell_count: next_fallback_bfs.reachable_cell_count(),

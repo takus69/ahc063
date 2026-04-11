@@ -228,7 +228,6 @@ struct Plan {
     phase: Phase,
     moves: Vec<char>,
     resume_greedy_after_apply: bool,
-    contains_bite: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -312,12 +311,11 @@ impl Solver {
                 break;
             }
 
-            if plan.contains_bite {
+            if self.plan_contains_bite(&state, &plan.moves) {
                 if let Some(no_bite_moves) = self.plan_pre_bite_no_bite_continuation(&state) {
                     if !self.plan_contains_bite(&state, &no_bite_moves) {
                         plan.moves = no_bite_moves;
                         plan.resume_greedy_after_apply = true;
-                        plan.contains_bite = false;
                     }
                 }
             }
@@ -330,7 +328,7 @@ impl Solver {
                 self.safe_collect_count += 1;
             }
 
-            if plan.contains_bite {
+            if self.plan_contains_bite(&state, &plan.moves) {
                 let mut stats = self.current_output_stats(false);
                 stats.stop_reason = "pre_bite_snapshot";
                 self.update_best_snapshot(&self.ops.clone(), stats);
@@ -752,7 +750,6 @@ impl Solver {
             phase: Phase::GreedyTarget,
             moves,
             resume_greedy_after_apply: false,
-            contains_bite: true,
         })
     }
 
@@ -839,9 +836,8 @@ impl Solver {
         };
         Some(Plan {
             phase: Phase::SafeCollect,
-            moves: moves.clone(),
+            moves,
             resume_greedy_after_apply,
-            contains_bite: self.plan_contains_bite(state, &moves),
         })
     }
 
@@ -1077,7 +1073,6 @@ impl Solver {
             phase: Phase::BiteRebuild,
             moves,
             resume_greedy_after_apply: false,
-            contains_bite: true,
         })
     }
 
@@ -1167,7 +1162,6 @@ impl Solver {
             phase: Phase::BiteRebuild,
             moves,
             resume_greedy_after_apply: false,
-            contains_bite: true,
         })
     }
 
@@ -1388,7 +1382,6 @@ impl Solver {
             phase: Phase::BiteRebuild,
             moves,
             resume_greedy_after_apply: false,
-            contains_bite: true,
         })
     }
 
@@ -1998,7 +1991,6 @@ impl Solver {
                 phase: Phase::SafeCollect,
                 moves,
                 resume_greedy_after_apply: false,
-                contains_bite: false,
             }));
 
         if let Some(plan) = plan {
@@ -2052,7 +2044,7 @@ impl Solver {
                 }
                 seen_moves.push(moves.clone());
 
-                let eval = self.evaluate_greedy_target_candidate(state, &moves);
+                let eval = self.evaluate_greedy_target_candidate_with_bfs(state, &moves);
                 let candidate = (
                     eval,
                     moves.len(),
@@ -2060,7 +2052,6 @@ impl Solver {
                         phase: Phase::GreedyTarget,
                         moves,
                         resume_greedy_after_apply: false,
-                        contains_bite: false,
                     },
                     bfs.clone(),
                     target,
@@ -2295,7 +2286,13 @@ impl Solver {
         (self.prefix_len(&simulated), simulated.colors.len(), matched_target_hits)
     }
 
-    fn build_greedy_eval(&self, next_state: &SnakeState, include_target_continuity: bool) -> GreedyEval {
+    fn build_greedy_eval_with_bfs(
+        &self,
+        next_state: &SnakeState,
+        include_target_continuity: bool,
+        next_target_bfs: Option<&BfsResult>,
+        next_fallback_bfs: &BfsResult,
+    ) -> GreedyEval {
         let consecutive_target_hits_3 = if include_target_continuity {
             self.count_consecutive_target_hits(next_state, 3)
         } else {
@@ -2305,20 +2302,18 @@ impl Solver {
             self.project_prefix_frontier(next_state, GREEDY_PROJECT_HORIZON);
         let next_target_dist = if next_state.colors.len() < self.input.m {
             let next_target_color = self.input.d[next_state.colors.len()];
-            let next_bfs = self.bfs_reachable_target_color(next_state, next_target_color);
-            self.choose_nearest_food_of_color(next_state, &next_bfs, next_target_color)
+            let next_bfs = next_target_bfs.expect("target bfs must exist when snake is not full");
+            self.choose_nearest_food_of_color(next_state, next_bfs, next_target_color)
                 .map(|target| target.dist)
         } else {
             Some(0)
         };
         let next_fallback_dist = if next_state.colors.len() < self.input.m {
-            let next_bfs = self.bfs_reachable_first_food(next_state);
-            self.choose_nearest_food(next_state, &next_bfs)
+            self.choose_nearest_food(next_state, next_fallback_bfs)
                 .map(|target| target.dist)
         } else {
             Some(0)
         };
-        let reexpand_bfs = self.bfs_reachable_first_food(next_state);
 
         GreedyEval {
             consecutive_target_hits_3,
@@ -2328,10 +2323,27 @@ impl Solver {
             projected_matched_target_hits,
             next_target_dist,
             next_fallback_dist,
-            reachable_cell_count: reexpand_bfs.reachable_cell_count(),
-            reachable_food_count: reexpand_bfs.reachable_food_count(next_state),
+            reachable_cell_count: next_fallback_bfs.reachable_cell_count(),
+            reachable_food_count: next_fallback_bfs.reachable_food_count(next_state),
             prefix_len: self.prefix_len(next_state),
         }
+    }
+
+    fn build_greedy_eval(&self, next_state: &SnakeState, include_target_continuity: bool) -> GreedyEval {
+        let next_target_bfs = if next_state.colors.len() < self.input.m {
+            let next_target_color = self.input.d[next_state.colors.len()];
+            Some(self.bfs_reachable_target_color(next_state, next_target_color))
+        } else {
+            None
+        };
+        let next_fallback_bfs = self.bfs_reachable_first_food(next_state);
+
+        self.build_greedy_eval_with_bfs(
+            next_state,
+            include_target_continuity,
+            next_target_bfs.as_ref(),
+            &next_fallback_bfs,
+        )
     }
 
     fn evaluate_greedy_target_candidate(&self, state: &SnakeState, moves: &[char]) -> GreedyEval {
@@ -2342,6 +2354,44 @@ impl Solver {
         };
         self.apply_moves(&mut next_state, moves);
         self.build_greedy_eval(&next_state, true)
+    }
+
+    fn evaluate_greedy_target_candidate_with_bfs(
+        &self,
+        state: &SnakeState,
+        moves: &[char],
+    ) -> GreedyEval {
+        let mut next_state = SnakeState {
+            board: state.board.clone(),
+            positions: state.positions.clone(),
+            colors: state.colors.clone(),
+        };
+        self.apply_moves(&mut next_state, moves);
+
+        let cell_open_turn = self.build_cell_open_turn(&next_state);
+        let next_target_bfs = if next_state.colors.len() < self.input.m {
+            let next_target_color = self.input.d[next_state.colors.len()];
+            Some(self.bfs_reachable_target_color_with_order_precomputed(
+                &next_state,
+                next_target_color,
+                &TARGET_BFS_ORDERS[0],
+                &cell_open_turn,
+            ))
+        } else {
+            None
+        };
+        let next_fallback_bfs = self.bfs_reachable_first_food_with_order_precomputed(
+            &next_state,
+            &TARGET_BFS_ORDERS[0],
+            &cell_open_turn,
+        );
+
+        self.build_greedy_eval_with_bfs(
+            &next_state,
+            true,
+            next_target_bfs.as_ref(),
+            &next_fallback_bfs,
+        )
     }
 
     fn plan_greedy_fallback_inner(
@@ -2375,7 +2425,7 @@ impl Solver {
                 }
                 seen_moves.push(moves.clone());
 
-                let eval = self.evaluate_greedy_fallback_candidate(state, &moves);
+                let eval = self.evaluate_greedy_fallback_candidate_with_bfs(state, &moves);
                 let candidate = (
                     eval,
                     moves.len(),
@@ -2383,7 +2433,6 @@ impl Solver {
                         phase: Phase::GreedyFallback,
                         moves,
                         resume_greedy_after_apply: false,
-                        contains_bite: false,
                     },
                     bfs.clone(),
                     target,
@@ -2419,6 +2468,44 @@ impl Solver {
         };
         self.apply_moves(&mut next_state, moves);
         self.build_greedy_eval(&next_state, false)
+    }
+
+    fn evaluate_greedy_fallback_candidate_with_bfs(
+        &self,
+        state: &SnakeState,
+        moves: &[char],
+    ) -> GreedyEval {
+        let mut next_state = SnakeState {
+            board: state.board.clone(),
+            positions: state.positions.clone(),
+            colors: state.colors.clone(),
+        };
+        self.apply_moves(&mut next_state, moves);
+
+        let cell_open_turn = self.build_cell_open_turn(&next_state);
+        let next_target_bfs = if next_state.colors.len() < self.input.m {
+            let next_target_color = self.input.d[next_state.colors.len()];
+            Some(self.bfs_reachable_target_color_with_order_precomputed(
+                &next_state,
+                next_target_color,
+                &TARGET_BFS_ORDERS[0],
+                &cell_open_turn,
+            ))
+        } else {
+            None
+        };
+        let next_fallback_bfs = self.bfs_reachable_first_food_with_order_precomputed(
+            &next_state,
+            &TARGET_BFS_ORDERS[0],
+            &cell_open_turn,
+        );
+
+        self.build_greedy_eval_with_bfs(
+            &next_state,
+            false,
+            next_target_bfs.as_ref(),
+            &next_fallback_bfs,
+        )
     }
 
     #[cfg(debug_assertions)]

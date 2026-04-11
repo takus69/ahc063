@@ -114,7 +114,6 @@ struct GreedyEval {
     projected_prefix_len: usize,
     projected_final_length: usize,
     projected_matched_target_hits: usize,
-    post_bite_target_dist: Option<usize>,
     next_target_dist: Option<usize>,
     next_fallback_dist: Option<usize>,
     reachable_cell_count: usize,
@@ -278,6 +277,8 @@ impl Solver {
         self.reset_debug_answer();
         self.reset_debug_main_answer();
 
+        self.run_frontier_prepass(&mut state);
+
         loop {
             if self.should_stop(&state) {
                 self.stop_reason = if self.force_safe_collect_mode && state.colors.len() == self.input.m {
@@ -377,6 +378,138 @@ impl Solver {
             self.ops = best.ops.clone();
         }
         self.write_debug_answer();
+    }
+
+    fn run_frontier_prepass(&mut self, state: &mut SnakeState) {
+        let mut fallback_steps = 0usize;
+
+        while self.prefix_len(state) < self.input.m && self.ops.len() < 100000 {
+            let start_prefix = self.prefix_len(state);
+            let start_len = state.colors.len();
+
+            if let Some(moves) = self.plan_simple_target(state) {
+                let moves = self
+                    .plan_greedy_target_inner(state)
+                    .map(|(plan, _, _, _)| plan.moves)
+                    .unwrap_or(moves);
+                if moves.is_empty() {
+                    break;
+                }
+                self.apply_moves(state, &moves);
+                self.ops.extend(moves);
+                fallback_steps = 0;
+            } else if let Some(moves) = self.plan_bite_restore_target(state) {
+                if moves.is_empty() {
+                    break;
+                }
+                self.apply_moves(state, &moves);
+                self.ops.extend(moves);
+                fallback_steps = 0;
+            } else if let Some((plan, _, _)) = self.plan_greedy_fallback_inner(state) {
+                if plan.moves.is_empty() {
+                    break;
+                }
+                self.apply_moves(state, &plan.moves);
+                self.ops.extend(plan.moves.iter().copied());
+                fallback_steps += 1;
+                if fallback_steps >= 2 {
+                    break;
+                }
+            } else {
+                break;
+            }
+
+            if self.should_stop(state) {
+                break;
+            }
+            if self.prefix_len(state) == start_prefix && state.colors.len() == start_len {
+                break;
+            }
+        }
+    }
+
+    fn plan_simple_target(&self, state: &SnakeState) -> Option<Vec<char>> {
+        if state.colors.len() >= self.input.m {
+            return None;
+        }
+        let target_color = self.input.d[state.colors.len()];
+        let bfs = self.bfs_reachable_target_color(state, target_color);
+        let target = self.choose_nearest_food_of_color(state, &bfs, target_color)?;
+        bfs.restore_moves(target.cell)
+    }
+
+    fn plan_bite_restore_target(&self, state: &SnakeState) -> Option<Vec<char>> {
+        if state.colors.len() >= self.input.m {
+            return None;
+        }
+
+        let frontier = self.prefix_len(state);
+        if frontier == 0 {
+            return None;
+        }
+
+        let mut best: Option<(usize, usize, usize, Vec<char>)> = None;
+        let max_idx = state.positions.len().saturating_sub(2).min(frontier.max(2));
+        for idx in 2..=max_idx {
+            let Some((bite_moves, bitten, dropped_suffix)) =
+                self.simulate_bite_candidate_with_dropped_suffix(state, idx)
+            else {
+                continue;
+            };
+
+            let restore_len = frontier.saturating_sub(1);
+            if bitten.colors.len() > restore_len {
+                continue;
+            }
+            let rebuild_need = restore_len.saturating_sub(bitten.colors.len());
+            if rebuild_need > dropped_suffix.len() {
+                continue;
+            }
+            let Some((restored_state, rebuild_moves)) =
+                self.rebuild_prefix_suffix(bitten, &dropped_suffix, rebuild_need)
+            else {
+                continue;
+            };
+            if self.prefix_len(&restored_state) != restore_len {
+                continue;
+            }
+
+            let Some(simple_target_moves) = self.plan_simple_target(&restored_state) else {
+                continue;
+            };
+            let mut projected_state = SnakeState {
+                board: restored_state.board.clone(),
+                positions: restored_state.positions.clone(),
+                colors: restored_state.colors.clone(),
+            };
+            self.apply_moves(&mut projected_state, &simple_target_moves);
+            let deep_moves = self
+                .plan_greedy_target_inner(&projected_state)
+                .map(|(plan, _, _, _)| plan.moves)
+                .unwrap_or_default();
+            if !deep_moves.is_empty() {
+                self.apply_moves(&mut projected_state, &deep_moves);
+            }
+
+            let candidate_prefix = self.prefix_len(&projected_state);
+            let candidate_len = projected_state.colors.len();
+            let total_len = bite_moves.len() + rebuild_moves.len() + simple_target_moves.len() + deep_moves.len();
+            let mut moves = bite_moves;
+            moves.extend(rebuild_moves);
+            moves.extend(simple_target_moves);
+            moves.extend(deep_moves);
+
+            if best.as_ref().is_none_or(|current| {
+                candidate_prefix > current.0
+                    || (candidate_prefix == current.0 && candidate_len > current.1)
+                    || (candidate_prefix == current.0 && candidate_len == current.1 && total_len < current.2)
+                    || (candidate_prefix == current.0 && candidate_len == current.1 && total_len == current.2 && moves.len() < current.3.len())
+            }) {
+                best = Some((candidate_prefix, candidate_len, total_len, moves));
+            }
+        }
+
+        best.map(|(_, _, _, moves)| moves)
     }
 
     fn ans(&self) {
@@ -2119,27 +2252,6 @@ impl Solver {
                         && candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
                         && candidate_eval.projected_final_length == current_eval.projected_final_length
                         && candidate_eval.projected_matched_target_hits == current_eval.projected_matched_target_hits
-                        && candidate_eval.post_bite_target_dist.is_some()
-                        && current_eval.post_bite_target_dist.is_none())
-                    || (candidate_eval.consecutive_target_hits_3 == current_eval.consecutive_target_hits_3
-                        && candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
-                        && candidate_eval.consecutive_target_total_dist
-                            == current_eval.consecutive_target_total_dist
-                        && candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
-                        && candidate_eval.projected_final_length == current_eval.projected_final_length
-                        && candidate_eval.projected_matched_target_hits == current_eval.projected_matched_target_hits
-                        && candidate_eval.post_bite_target_dist.is_some()
-                            == current_eval.post_bite_target_dist.is_some()
-                        && candidate_eval.post_bite_target_dist.unwrap_or(usize::MAX)
-                            < current_eval.post_bite_target_dist.unwrap_or(usize::MAX))
-                    || (candidate_eval.consecutive_target_hits_3 == current_eval.consecutive_target_hits_3
-                        && candidate_eval.consecutive_target_hits == current_eval.consecutive_target_hits
-                        && candidate_eval.consecutive_target_total_dist
-                            == current_eval.consecutive_target_total_dist
-                        && candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
-                        && candidate_eval.projected_final_length == current_eval.projected_final_length
-                        && candidate_eval.projected_matched_target_hits == current_eval.projected_matched_target_hits
-                        && candidate_eval.post_bite_target_dist == current_eval.post_bite_target_dist
                         && candidate_eval.next_target_dist.is_some()
                         && current_eval.next_target_dist.is_none())
                     || (candidate_eval.consecutive_target_hits_3 == current_eval.consecutive_target_hits_3
@@ -2149,7 +2261,6 @@ impl Solver {
                         && candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
                         && candidate_eval.projected_final_length == current_eval.projected_final_length
                         && candidate_eval.projected_matched_target_hits == current_eval.projected_matched_target_hits
-                        && candidate_eval.post_bite_target_dist == current_eval.post_bite_target_dist
                         && candidate_eval.next_target_dist.is_some() == current_eval.next_target_dist.is_some()
                         && candidate_eval.next_target_dist.unwrap_or(usize::MAX)
                             < current_eval.next_target_dist.unwrap_or(usize::MAX))
@@ -2160,7 +2271,6 @@ impl Solver {
                         && candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
                         && candidate_eval.projected_final_length == current_eval.projected_final_length
                         && candidate_eval.projected_matched_target_hits == current_eval.projected_matched_target_hits
-                        && candidate_eval.post_bite_target_dist == current_eval.post_bite_target_dist
                         && candidate_eval.next_target_dist == current_eval.next_target_dist
                         && candidate_eval.next_fallback_dist.is_some()
                         && current_eval.next_fallback_dist.is_none())
@@ -2171,7 +2281,6 @@ impl Solver {
                         && candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
                         && candidate_eval.projected_final_length == current_eval.projected_final_length
                         && candidate_eval.projected_matched_target_hits == current_eval.projected_matched_target_hits
-                        && candidate_eval.post_bite_target_dist == current_eval.post_bite_target_dist
                         && candidate_eval.next_target_dist == current_eval.next_target_dist
                         && candidate_eval.next_fallback_dist.is_some() == current_eval.next_fallback_dist.is_some()
                         && candidate_eval.next_fallback_dist.unwrap_or(usize::MAX)
@@ -2183,7 +2292,6 @@ impl Solver {
                         && candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
                         && candidate_eval.projected_final_length == current_eval.projected_final_length
                         && candidate_eval.projected_matched_target_hits == current_eval.projected_matched_target_hits
-                        && candidate_eval.post_bite_target_dist == current_eval.post_bite_target_dist
                         && candidate_eval.next_target_dist == current_eval.next_target_dist
                         && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
                         && candidate_eval.reachable_food_count > current_eval.reachable_food_count)
@@ -2194,7 +2302,6 @@ impl Solver {
                         && candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
                         && candidate_eval.projected_final_length == current_eval.projected_final_length
                         && candidate_eval.projected_matched_target_hits == current_eval.projected_matched_target_hits
-                        && candidate_eval.post_bite_target_dist == current_eval.post_bite_target_dist
                         && candidate_eval.next_target_dist == current_eval.next_target_dist
                         && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
                         && candidate_eval.reachable_food_count == current_eval.reachable_food_count
@@ -2206,7 +2313,6 @@ impl Solver {
                         && candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
                         && candidate_eval.projected_final_length == current_eval.projected_final_length
                         && candidate_eval.projected_matched_target_hits == current_eval.projected_matched_target_hits
-                        && candidate_eval.post_bite_target_dist == current_eval.post_bite_target_dist
                         && candidate_eval.next_target_dist == current_eval.next_target_dist
                         && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
                         && candidate_eval.reachable_food_count == current_eval.reachable_food_count
@@ -2219,7 +2325,6 @@ impl Solver {
                         && candidate_eval.projected_prefix_len == current_eval.projected_prefix_len
                         && candidate_eval.projected_final_length == current_eval.projected_final_length
                         && candidate_eval.projected_matched_target_hits == current_eval.projected_matched_target_hits
-                        && candidate_eval.post_bite_target_dist == current_eval.post_bite_target_dist
                         && candidate_eval.next_target_dist == current_eval.next_target_dist
                         && candidate_eval.next_fallback_dist == current_eval.next_fallback_dist
                         && candidate_eval.reachable_food_count == current_eval.reachable_food_count
@@ -2344,41 +2449,6 @@ impl Solver {
         (self.prefix_len(&simulated), simulated.colors.len(), matched_target_hits)
     }
 
-    fn evaluate_post_bite_target_dist(&self, state: &SnakeState) -> Option<usize> {
-        if state.colors.len() >= self.input.m {
-            return Some(0);
-        }
-        let mut best: Option<usize> = None;
-        let max_idx = state.positions.len().saturating_sub(2).min(5);
-        for idx in 2..=max_idx {
-            let Some((_, bitten, dropped_suffix)) =
-                self.simulate_bite_candidate_with_dropped_suffix(state, idx)
-            else {
-                continue;
-            };
-            let continued = self.simulate_regrow_bite_continuation(
-                &bitten,
-                &dropped_suffix,
-                BITE_CONTINUATION_HORIZON,
-            );
-            let after = &continued.state;
-            let dist = if after.colors.len() < self.input.m {
-                let next_target_color = self.input.d[after.colors.len()];
-                let bfs = self.bfs_reachable_target_color(after, next_target_color);
-                self.choose_nearest_food_of_color(after, &bfs, next_target_color)
-                    .map(|target| target.dist)
-            } else {
-                Some(0)
-            };
-            if let Some(dist) = dist {
-                if best.is_none_or(|current| dist < current) {
-                    best = Some(dist);
-                }
-            }
-        }
-        best
-    }
-
     fn build_greedy_eval_with_bfs(
         &self,
         next_state: &SnakeState,
@@ -2393,7 +2463,6 @@ impl Solver {
         };
         let (projected_prefix_len, projected_final_length, projected_matched_target_hits) =
             self.project_prefix_frontier(next_state, GREEDY_PROJECT_HORIZON);
-        let post_bite_target_dist = self.evaluate_post_bite_target_dist(next_state);
         let next_target_dist = if next_state.colors.len() < self.input.m {
             let next_target_color = self.input.d[next_state.colors.len()];
             let next_bfs = next_target_bfs.expect("target bfs must exist when snake is not full");
@@ -2416,7 +2485,6 @@ impl Solver {
             projected_prefix_len,
             projected_final_length,
             projected_matched_target_hits,
-            post_bite_target_dist,
             next_target_dist,
             next_fallback_dist,
             reachable_cell_count: next_fallback_bfs.reachable_cell_count(),

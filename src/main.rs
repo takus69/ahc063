@@ -3017,17 +3017,7 @@ impl Solver {
     ) -> BfsResult {
         let start = state.positions[0];
         let mut result = BfsResult::new(self.input.n, start);
-        let mut blocked_open_turn = cell_open_turn.to_vec();
         let mut queue = VecDeque::new();
-
-        for i in 0..self.input.n {
-            for j in 0..self.input.n {
-                let food = state.board[i][j];
-                if food != 0 && food != target_color {
-                    blocked_open_turn[i][j] = usize::MAX;
-                }
-            }
-        }
 
         result.reachable[start.0][start.1] = true;
         result.dist[start.0][start.1] = Some(0);
@@ -3045,8 +3035,11 @@ impl Solver {
                 let Some(next) = self.try_advance(current, op) else {
                     continue;
                 };
+                if state.board[next.0][next.1] != 0 && state.board[next.0][next.1] != target_color {
+                    continue;
+                }
                 let arrival_turn = current_dist + 1;
-                let still_occupied = blocked_open_turn[next.0][next.1] > arrival_turn;
+                let still_occupied = cell_open_turn[next.0][next.1] > arrival_turn;
                 if still_occupied || result.reachable[next.0][next.1] {
                     continue;
                 }
@@ -3070,16 +3063,7 @@ impl Solver {
     ) -> BfsResult {
         let start = state.positions[0];
         let mut result = BfsResult::new(self.input.n, start);
-        let mut blocked_open_turn = cell_open_turn.to_vec();
         let mut queue = VecDeque::new();
-
-        for i in 0..self.input.n {
-            for j in 0..self.input.n {
-                if state.board[i][j] != 0 && (i, j) != target {
-                    blocked_open_turn[i][j] = usize::MAX;
-                }
-            }
-        }
 
         result.reachable[start.0][start.1] = true;
         result.dist[start.0][start.1] = Some(0);
@@ -3097,8 +3081,11 @@ impl Solver {
                 let Some(next) = self.try_advance(current, op) else {
                     continue;
                 };
+                if state.board[next.0][next.1] != 0 && next != target {
+                    continue;
+                }
                 let arrival_turn = current_dist + 1;
-                let still_occupied = blocked_open_turn[next.0][next.1] > arrival_turn;
+                let still_occupied = cell_open_turn[next.0][next.1] > arrival_turn;
                 if still_occupied || result.reachable[next.0][next.1] {
                     continue;
                 }

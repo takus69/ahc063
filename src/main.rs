@@ -2013,9 +2013,17 @@ impl Solver {
             return None;
         }
         let target_color = self.input.d[state.colors.len()];
+        let cell_open_turn = self.build_cell_open_turn(state);
         let bfs_by_order = TARGET_BFS_ORDERS
             .iter()
-            .map(|order| self.bfs_reachable_target_color_with_order(state, target_color, order))
+            .map(|order| {
+                self.bfs_reachable_target_color_with_order_precomputed(
+                    state,
+                    target_color,
+                    order,
+                    &cell_open_turn,
+                )
+            })
             .collect::<Vec<_>>();
         let targets = self.choose_top_foods_of_color(
             state,
@@ -2331,9 +2339,16 @@ impl Solver {
         &self,
         state: &SnakeState,
     ) -> Option<(Plan, BfsResult, FoodTarget)> {
+        let cell_open_turn = self.build_cell_open_turn(state);
         let bfs_by_order = TARGET_BFS_ORDERS
             .iter()
-            .map(|order| self.bfs_reachable_first_food_with_order(state, order))
+            .map(|order| {
+                self.bfs_reachable_first_food_with_order_precomputed(
+                    state,
+                    order,
+                    &cell_open_turn,
+                )
+            })
             .collect::<Vec<_>>();
         let targets =
             self.choose_top_foods(state, &bfs_by_order[0], GREEDY_FALLBACK_CANDIDATE_LIMIT);
@@ -2820,9 +2835,47 @@ impl Solver {
         state: &SnakeState,
         order: &[char; 4],
     ) -> BfsResult {
+        let cell_open_turn = self.build_cell_open_turn(state);
+        self.bfs_reachable_first_food_with_order_precomputed(state, order, &cell_open_turn)
+    }
+
+    fn bfs_reachable_target_color(&self, state: &SnakeState, target_color: usize) -> BfsResult {
+        self.bfs_reachable_target_color_with_order(state, target_color, &TARGET_BFS_ORDERS[0])
+    }
+
+    fn bfs_reachable_food_target_cell(
+        &self,
+        state: &SnakeState,
+        target: (usize, usize),
+    ) -> BfsResult {
+        let cell_open_turn = self.build_cell_open_turn(state);
+        self.bfs_reachable_food_target_cell_precomputed(state, target, &cell_open_turn)
+    }
+
+    fn bfs_reachable_target_color_with_order(
+        &self,
+        state: &SnakeState,
+        target_color: usize,
+        order: &[char; 4],
+    ) -> BfsResult {
+        let cell_open_turn = self.build_cell_open_turn(state);
+        self.bfs_reachable_target_color_with_order_precomputed(
+            state,
+            target_color,
+            order,
+            &cell_open_turn,
+        )
+    }
+
+
+    fn bfs_reachable_first_food_with_order_precomputed(
+        &self,
+        state: &SnakeState,
+        order: &[char; 4],
+        cell_open_turn: &[Vec<usize>],
+    ) -> BfsResult {
         let start = state.positions[0];
         let mut result = BfsResult::new(self.input.n, start);
-        let cell_open_turn = self.build_cell_open_turn(state);
         let mut queue = VecDeque::new();
 
         result.reachable[start.0][start.1] = true;
@@ -2833,7 +2886,6 @@ impl Solver {
             let current_dist =
                 result.dist[current.0][current.1].expect("visited cell must have distance");
 
-            // 任意餌 fallback でも、最初に到達した餌で一度止まって再計画する。
             if current != start && state.board[current.0][current.1] != 0 {
                 continue;
             }
@@ -2859,24 +2911,75 @@ impl Solver {
         result
     }
 
-    fn bfs_reachable_target_color(&self, state: &SnakeState, target_color: usize) -> BfsResult {
-        self.bfs_reachable_target_color_with_order(state, target_color, &TARGET_BFS_ORDERS[0])
-    }
-
-    fn bfs_reachable_food_target_cell(
+    fn bfs_reachable_target_color_with_order_precomputed(
         &self,
         state: &SnakeState,
-        target: (usize, usize),
+        target_color: usize,
+        order: &[char; 4],
+        cell_open_turn: &[Vec<usize>],
     ) -> BfsResult {
         let start = state.positions[0];
         let mut result = BfsResult::new(self.input.n, start);
-        let mut cell_open_turn = self.build_cell_open_turn(state);
+        let mut blocked_open_turn = cell_open_turn.to_vec();
+        let mut queue = VecDeque::new();
+
+        for i in 0..self.input.n {
+            for j in 0..self.input.n {
+                let food = state.board[i][j];
+                if food != 0 && food != target_color {
+                    blocked_open_turn[i][j] = usize::MAX;
+                }
+            }
+        }
+
+        result.reachable[start.0][start.1] = true;
+        result.dist[start.0][start.1] = Some(0);
+        queue.push_back(start);
+
+        while let Some(current) = queue.pop_front() {
+            let current_dist =
+                result.dist[current.0][current.1].expect("visited cell must have distance");
+
+            if current != start && state.board[current.0][current.1] == target_color {
+                continue;
+            }
+
+            for &op in order {
+                let Some(next) = self.try_advance(current, op) else {
+                    continue;
+                };
+                let arrival_turn = current_dist + 1;
+                let still_occupied = blocked_open_turn[next.0][next.1] > arrival_turn;
+                if still_occupied || result.reachable[next.0][next.1] {
+                    continue;
+                }
+
+                result.reachable[next.0][next.1] = true;
+                result.dist[next.0][next.1] = Some(arrival_turn);
+                result.parent[next.0][next.1] = Some(current);
+                result.parent_move[next.0][next.1] = Some(op);
+                queue.push_back(next);
+            }
+        }
+
+        result
+    }
+
+    fn bfs_reachable_food_target_cell_precomputed(
+        &self,
+        state: &SnakeState,
+        target: (usize, usize),
+        cell_open_turn: &[Vec<usize>],
+    ) -> BfsResult {
+        let start = state.positions[0];
+        let mut result = BfsResult::new(self.input.n, start);
+        let mut blocked_open_turn = cell_open_turn.to_vec();
         let mut queue = VecDeque::new();
 
         for i in 0..self.input.n {
             for j in 0..self.input.n {
                 if state.board[i][j] != 0 && (i, j) != target {
-                    cell_open_turn[i][j] = usize::MAX;
+                    blocked_open_turn[i][j] = usize::MAX;
                 }
             }
         }
@@ -2898,7 +3001,7 @@ impl Solver {
                     continue;
                 };
                 let arrival_turn = current_dist + 1;
-                let still_occupied = cell_open_turn[next.0][next.1] > arrival_turn;
+                let still_occupied = blocked_open_turn[next.0][next.1] > arrival_turn;
                 if still_occupied || result.reachable[next.0][next.1] {
                     continue;
                 }
@@ -2910,59 +3013,6 @@ impl Solver {
                 if next == target {
                     return result;
                 }
-                queue.push_back(next);
-            }
-        }
-
-        result
-    }
-
-    fn bfs_reachable_target_color_with_order(
-        &self,
-        state: &SnakeState,
-        target_color: usize,
-        order: &[char; 4],
-    ) -> BfsResult {
-        let start = state.positions[0];
-        let mut result = BfsResult::new(self.input.n, start);
-        let mut cell_open_turn = self.build_cell_open_turn(state);
-        let mut queue = VecDeque::new();
-        for i in 0..self.input.n {
-            for j in 0..self.input.n {
-                let food = state.board[i][j];
-                if food != 0 && food != target_color {
-                    cell_open_turn[i][j] = usize::MAX;
-                }
-            }
-        }
-
-        result.reachable[start.0][start.1] = true;
-        result.dist[start.0][start.1] = Some(0);
-        queue.push_back(start);
-
-        while let Some(current) = queue.pop_front() {
-            let current_dist =
-                result.dist[current.0][current.1].expect("visited cell must have distance");
-
-            // 同色餌に到達したら、そこで止まる経路だけを候補にしたいので先へは展開しない。
-            if current != start && state.board[current.0][current.1] == target_color {
-                continue;
-            }
-
-            for &op in order {
-                let Some(next) = self.try_advance(current, op) else {
-                    continue;
-                };
-                let arrival_turn = current_dist + 1;
-                let still_occupied = cell_open_turn[next.0][next.1] > arrival_turn;
-                if still_occupied || result.reachable[next.0][next.1] {
-                    continue;
-                }
-
-                result.reachable[next.0][next.1] = true;
-                result.dist[next.0][next.1] = Some(arrival_turn);
-                result.parent[next.0][next.1] = Some(current);
-                result.parent_move[next.0][next.1] = Some(op);
                 queue.push_back(next);
             }
         }

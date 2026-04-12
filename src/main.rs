@@ -23,8 +23,7 @@ const GREEDY_PROJECT_HORIZON: usize = 4;
 const RESTART_BITE_FOR_TARGET_HEAD_CANDIDATE_LIMIT: usize = 6;
 const RESTART_BITE_FOR_TARGET_TARGET_HORIZON: usize = 3;
 const BITE_CONTINUATION_HORIZON: usize = 2;
-const FRONTIER_PREPASS_STALL_LIMIT: usize = 12;
-const FRONTIER_PREPASS_FALLBACK_CHAIN_LIMIT: usize = 6;
+const FRONTIER_PREPASS_TIME_LIMIT_MS: u128 = 1900;
 const TARGET_BFS_ORDERS: [[char; 4]; 4] = [
     ['U', 'D', 'L', 'R'],
     ['R', 'D', 'L', 'U'],
@@ -390,27 +389,21 @@ impl Solver {
 
 
     fn run_frontier_prepass(&mut self, state: &mut SnakeState) {
-        let mut stall_count = 0usize;
-        let mut fallback_chain = 0usize;
-
         while self.prefix_len(state) < self.input.m && self.ops.len() < 100000 {
+            if self.start.elapsed().as_millis() >= FRONTIER_PREPASS_TIME_LIMIT_MS {
+                self.stop_reason = "prepass_time_limit";
+                break;
+            }
+
             let prefix_before = self.prefix_len(state);
             let aligned = self.prefix_len(state) == state.colors.len();
 
             let moves = if aligned {
-                if let Some(moves) = self.plan_deep_frontier_target(state) {
-                    fallback_chain = 0;
-                    Some(moves)
-                } else {
-                    fallback_chain += 1;
-                    self.plan_make_restore_opportunity(state)
-                }
-            } else if let Some(moves) = self.plan_bite_restore_target(state) {
-                fallback_chain = 0;
-                Some(moves)
+                self.plan_deep_frontier_target(state)
+                    .or_else(|| self.plan_make_restore_opportunity(state))
             } else {
-                fallback_chain += 1;
-                self.plan_make_restore_opportunity(state)
+                self.plan_bite_restore_target(state)
+                    .or_else(|| self.plan_make_restore_opportunity(state))
             };
 
             let Some(moves) = moves else {
@@ -459,17 +452,8 @@ impl Solver {
                 break;
             }
 
-            if prefix_after > prefix_before {
-                stall_count = 0;
-            } else {
-                stall_count += 1;
-            }
-            if stall_count >= FRONTIER_PREPASS_STALL_LIMIT {
-                self.stop_reason = "prepass_stall_limit";
-                break;
-            }
-            if fallback_chain >= FRONTIER_PREPASS_FALLBACK_CHAIN_LIMIT {
-                self.stop_reason = "prepass_fallback_chain_limit";
+            if self.start.elapsed().as_millis() >= FRONTIER_PREPASS_TIME_LIMIT_MS {
+                self.stop_reason = "prepass_time_limit";
                 break;
             }
         }
@@ -479,6 +463,8 @@ impl Solver {
                 "completed"
             } else if self.ops.len() >= 100000 {
                 "prepass_turn_limit"
+            } else if self.start.elapsed().as_millis() >= FRONTIER_PREPASS_TIME_LIMIT_MS {
+                "prepass_time_limit"
             } else {
                 "prepass_loop_exit"
             };

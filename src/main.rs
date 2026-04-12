@@ -424,6 +424,8 @@ impl Solver {
                 moves
             };
 
+            let moves = moves.or_else(|| self.plan_emergency_escape_bite(state));
+
             let Some(moves) = moves else {
                 self.stop_reason = if aligned {
                     "prepass_no_restore_opportunity"
@@ -709,6 +711,37 @@ impl Solver {
         candidates.shuffle(&mut self.rng);
         let target = *candidates.first()?;
         bfs.restore_moves(target)
+    }
+
+
+    fn plan_emergency_escape_bite(&self, state: &SnakeState) -> Option<Vec<char>> {
+        let current_prefix = self.prefix_len(state);
+        let mut best: Option<((usize, usize, usize, usize, usize), Vec<char>)> = None;
+
+        for idx in 2..state.positions.len().saturating_sub(1) {
+            let Some((moves, bitten)) = self.simulate_bite_candidate(state, idx) else {
+                continue;
+            };
+            if moves.is_empty() {
+                continue;
+            }
+
+            let prefix_loss = current_prefix.saturating_sub(self.prefix_len(&bitten));
+            let reexpand_bfs = self.bfs_reachable_first_food(&bitten);
+            let candidate_key = (
+                prefix_loss,
+                usize::MAX - reexpand_bfs.reachable_food_count(&bitten),
+                usize::MAX - reexpand_bfs.reachable_cell_count(),
+                usize::MAX - bitten.colors.len(),
+                moves.len(),
+            );
+
+            if best.as_ref().is_none_or(|current| candidate_key < current.0) {
+                best = Some((candidate_key, moves));
+            }
+        }
+
+        best.map(|(_, moves)| moves)
     }
 
     fn ans(&self) {

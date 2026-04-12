@@ -20,6 +20,10 @@ const RESTART_REBUILD_REGROW_HORIZON: usize = 6;
 const PRE_BITE_NO_BITE_HORIZON: usize = 6;
 const PRE_BITE_NO_BITE_RECHECK_REMAINING_FOOD_LIMIT: usize = 16;
 const GREEDY_PROJECT_HORIZON: usize = 4;
+const SMALL_CASE_GREEDY_TARGET_CANDIDATE_LIMIT: usize = 8;
+const SMALL_CASE_GREEDY_PROJECT_HORIZON: usize = 8;
+const SMALL_CASE_M_LIMIT: usize = 20;
+const SMALL_CASE_C_LIMIT: usize = 3;
 const RESTART_BITE_FOR_TARGET_HEAD_CANDIDATE_LIMIT: usize = 6;
 const RESTART_BITE_FOR_TARGET_TARGET_HORIZON: usize = 3;
 const BITE_CONTINUATION_HORIZON: usize = 2;
@@ -2384,6 +2388,26 @@ impl Solver {
         self.prefix_len(&resumed)
     }
 
+    fn is_small_case_greedy_mode(&self) -> bool {
+        self.input.m <= SMALL_CASE_M_LIMIT || self.input.c <= SMALL_CASE_C_LIMIT
+    }
+
+    fn greedy_target_candidate_limit(&self) -> usize {
+        if self.is_small_case_greedy_mode() {
+            SMALL_CASE_GREEDY_TARGET_CANDIDATE_LIMIT
+        } else {
+            GREEDY_TARGET_CANDIDATE_LIMIT
+        }
+    }
+
+    fn greedy_project_horizon(&self) -> usize {
+        if self.is_small_case_greedy_mode() {
+            SMALL_CASE_GREEDY_PROJECT_HORIZON
+        } else {
+            GREEDY_PROJECT_HORIZON
+        }
+    }
+
     fn should_force_safe_collect(&self) -> bool {
         self.start.elapsed().as_millis() >= SAFE_COLLECT_TIME_LIMIT_MS
             || self.ops.len() >= SAFE_COLLECT_TURN_LIMIT
@@ -2413,7 +2437,7 @@ impl Solver {
             state,
             &bfs_by_order[0],
             target_color,
-            GREEDY_TARGET_CANDIDATE_LIMIT,
+            self.greedy_target_candidate_limit(),
         );
         let mut best: Option<(GreedyEval, usize, Plan, BfsResult, FoodTarget)> = None;
 
@@ -2677,7 +2701,7 @@ impl Solver {
             0
         };
         let (projected_prefix_len, projected_final_length, projected_matched_target_hits) =
-            self.project_prefix_frontier(next_state, GREEDY_PROJECT_HORIZON);
+            self.project_prefix_frontier(next_state, self.greedy_project_horizon());
         let next_target_dist = if next_state.colors.len() < self.input.m {
             let next_target_color = self.input.d[next_state.colors.len()];
             let next_bfs = self.bfs_reachable_target_color(next_state, next_target_color);

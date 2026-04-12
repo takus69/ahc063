@@ -165,6 +165,7 @@ E[E | M = k] ≒ 70.33 * 0.78143 ≒ 54.96
 
 | 日付 | local | submit | 順位 | 概要 |
 | --- | ---: | ---: | ---: | --- |
+| 2026-04-13 | 66,571 | 75,788 | 274 | emergency bite escape を導入し、`run_frontier_prepass` 後に同一状態へ戻るループの圧縮を追加。提出は更新できたが、ループ圧縮の寄与は限定的で、主改善は prepass の行き詰まり回避によるものとみられる。 |
 | 2026-04-12 | 68,595 | 78,814 | 269 | `prepass_no_bite_restore_candidate` 対策として emergency bite escape を導入し、ランダム移動まわりの障害物判定を調整。ローカルでは全完走・大幅改善、提出も大きく更新。 |
 | 2026-04-12 | 3,041,144 | 2,602,221 | 300 | `run_frontier_prepass` を主軸に改善。停止条件を時間制限化し、BFS order シャッフルと軽量化 loop escape を試行。 |
 | 2026-04-11 | 4,758,485 | 3,058,257 | 273 | `build_greedy_eval` 周辺の BFS 再利用と、BFS 内の `blocked_open_turn` clone 廃止で local は改善したが、提出スコアは 2 回前と同値に留まり、順位は 273 だった |

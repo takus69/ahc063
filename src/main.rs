@@ -1,6 +1,6 @@
 ﻿use proconio::input;
 use std::time::Instant;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use rand::{rngs::StdRng, seq::SliceRandom, SeedableRng};
 #[cfg(debug_assertions)]
 use std::io::Write;
@@ -76,6 +76,13 @@ struct Solver {
 
 #[derive(Clone, Debug)]
 struct SnakeState {
+    board: Vec<Vec<usize>>,
+    positions: Vec<(usize, usize)>,
+    colors: Vec<usize>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct SnakeStateKey {
     board: Vec<Vec<usize>>,
     positions: Vec<(usize, usize)>,
     colors: Vec<usize>,
@@ -275,6 +282,9 @@ impl Solver {
         self.reset_run_state();
         let mut state = self.initial_state();
         self.run_frontier_prepass(&mut state);
+        let (compressed_prepass_ops, compressed_state) = self.compress_loop_ops(&self.ops);
+        self.ops = compressed_prepass_ops;
+        state = compressed_state;
         let prepass_ops = self.ops.clone();
         let prepass_stats = self.current_output_stats(false);
 
@@ -314,6 +324,46 @@ impl Solver {
         self.safe_collect_count = 0;
         self.previous_phase = None;
         self.stop_reason = "unknown";
+    }
+
+    fn state_key(&self, state: &SnakeState) -> SnakeStateKey {
+        SnakeStateKey {
+            board: state.board.clone(),
+            positions: state.positions.clone(),
+            colors: state.colors.clone(),
+        }
+    }
+
+    fn compress_loop_ops(&self, ops: &[char]) -> (Vec<char>, SnakeState) {
+        let mut current = self.initial_state();
+        let mut compressed_ops = Vec::new();
+        let mut states = vec![current.clone()];
+        let mut seen: HashMap<SnakeStateKey, usize> = HashMap::new();
+        seen.insert(self.state_key(&current), 0);
+
+        for &op in ops {
+            self.apply_move(&mut current, op);
+            let key = self.state_key(&current);
+
+            if let Some(&prev_idx) = seen.get(&key) {
+                compressed_ops.truncate(prev_idx);
+                states.truncate(prev_idx + 1);
+                current = states
+                    .last()
+                    .cloned()
+                    .expect("states must keep the initial state");
+                seen.clear();
+                for (idx, state) in states.iter().enumerate() {
+                    seen.insert(self.state_key(state), idx);
+                }
+            } else {
+                compressed_ops.push(op);
+                states.push(current.clone());
+                seen.insert(key, compressed_ops.len());
+            }
+        }
+
+        (compressed_ops, current)
     }
 
     fn run_main_loop(&mut self, state: &mut SnakeState) {

@@ -264,9 +264,44 @@ impl Solver {
     }
 
     fn solve(&mut self) {
+        self.reset_phase_trace();
+        self.reset_debug_answer();
+        self.reset_debug_main_answer();
+
+        self.reset_run_state();
+        let mut state = self.initial_state();
+        self.run_frontier_prepass(&mut state);
+        let prepass_ops = self.ops.clone();
+        let prepass_stats = self.current_output_stats(false);
+
+        self.run_main_loop(&mut state);
+        let combined_ops = self.ops.clone();
+        let combined_stats = self.current_output_stats(false);
+        self.write_debug_main_answer(&combined_ops);
+
+        self.reset_run_state();
+        let mut state = self.initial_state();
+        self.run_main_loop(&mut state);
+        let main_only_ops = self.ops.clone();
+        let main_only_stats = self.current_output_stats(false);
+
+        self.best_snapshot = None;
+        self.update_best_snapshot(&prepass_ops, prepass_stats);
+        self.update_best_snapshot(&combined_ops, combined_stats);
+        self.update_best_snapshot(&main_only_ops, main_only_stats);
+
+        if let Some(best) = self.best_snapshot.as_ref() {
+            self.ops = best.ops.clone();
+        } else {
+            self.ops = combined_ops;
+        }
+
+        self.write_debug_answer();
+    }
+
+    fn reset_run_state(&mut self) {
         self.ops.clear();
         self.best_snapshot = None;
-        let mut state = self.initial_state();
         self.last_progress = None;
         self.safe_collect_active = false;
         self.force_safe_collect_mode = false;
@@ -275,16 +310,11 @@ impl Solver {
         self.safe_collect_count = 0;
         self.previous_phase = None;
         self.stop_reason = "unknown";
-        self.reset_phase_trace();
-        self.reset_debug_answer();
-        self.reset_debug_main_answer();
+    }
 
-        self.run_frontier_prepass(&mut state);
-        let prepass_ops = self.ops.clone();
-        let prepass_stats = self.current_output_stats(false);
-
+    fn run_main_loop(&mut self, state: &mut SnakeState) {
         loop {
-            if self.should_stop(&state) {
+            if self.should_stop(state) {
                 self.stop_reason = if self.force_safe_collect_mode && state.colors.len() == self.input.m {
                     "force_safe_full_length"
                 } else {
@@ -297,13 +327,13 @@ impl Solver {
                 break;
             }
 
-            let phase = self.choose_phase(&state);
+            let phase = self.choose_phase(state);
             self.write_phase_trace(self.ops.len(), phase);
             let plan = match phase {
-                Phase::GreedyTarget => self.plan_greedy_target(&state),
-                Phase::GreedyFallback => self.plan_greedy_fallback(&state),
-                Phase::SafeCollect => self.plan_safe_collect(&state),
-                Phase::BiteRebuild => self.plan_bite_rebuild(&state),
+                Phase::GreedyTarget => self.plan_greedy_target(state),
+                Phase::GreedyFallback => self.plan_greedy_fallback(state),
+                Phase::SafeCollect => self.plan_safe_collect(state),
+                Phase::BiteRebuild => self.plan_bite_rebuild(state),
             };
             let Some(mut plan) = plan else {
                 let mut stats = self.current_output_stats(false);
@@ -318,32 +348,32 @@ impl Solver {
                 break;
             }
 
-            if self.plan_contains_bite(&state, &plan.moves) {
-                if let Some(no_bite_moves) = self.plan_pre_bite_no_bite_continuation(&state) {
-                    if !self.plan_contains_bite(&state, &no_bite_moves) {
+            if self.plan_contains_bite(state, &plan.moves) {
+                if let Some(no_bite_moves) = self.plan_pre_bite_no_bite_continuation(state) {
+                    if !self.plan_contains_bite(state, &no_bite_moves) {
                         plan.moves = no_bite_moves;
                         plan.resume_greedy_after_apply = true;
                     }
                 }
             }
 
-            if self.should_launch_safe_branch(&state, &plan) {
-                self.run_safe_branch(&state);
+            if self.should_launch_safe_branch(state, &plan) {
+                self.run_safe_branch(state);
             }
 
             if plan.phase == Phase::SafeCollect && self.previous_phase != Some(Phase::SafeCollect) {
                 self.safe_collect_count += 1;
             }
 
-            if self.plan_contains_bite(&state, &plan.moves) {
+            if self.plan_contains_bite(state, &plan.moves) {
                 let mut stats = self.current_output_stats(false);
                 stats.stop_reason = "pre_bite_snapshot";
                 self.update_best_snapshot(&self.ops.clone(), stats);
             }
 
             let length_before = state.colors.len();
-            let prefix_before = self.prefix_len(&state);
-            self.apply_moves(&mut state, &plan.moves);
+            let prefix_before = self.prefix_len(state);
+            self.apply_moves(state, &plan.moves);
             if state.colors.len() < length_before {
                 if plan.phase == Phase::BiteRebuild {
                     self.rebuild_bite_count += 1;
@@ -352,7 +382,7 @@ impl Solver {
                 }
             }
             self.ops.extend(plan.moves.iter().copied());
-            let prefix_after = self.prefix_len(&state);
+            let prefix_after = self.prefix_len(state);
             if prefix_after > prefix_before {
                 let mut stats = self.current_output_stats(false);
                 stats.stop_reason = if prefix_after == self.input.m {
@@ -364,29 +394,16 @@ impl Solver {
             }
             if length_before < self.input.m && state.colors.len() == self.input.m {
                 let mut stats = self.current_output_stats(false);
-                stats.stop_reason = if self.prefix_len(&state) == self.input.m {
+                stats.stop_reason = if self.prefix_len(state) == self.input.m {
                     "completed"
                 } else {
                     "main_full_length_snapshot"
                 };
                 self.update_best_snapshot(&self.ops.clone(), stats);
             }
-            self.update_progress(&state, plan.phase, plan.resume_greedy_after_apply);
+            self.update_progress(state, plan.phase, plan.resume_greedy_after_apply);
             self.previous_phase = Some(plan.phase);
         }
-
-        let final_ops = self.ops.clone();
-        self.write_debug_main_answer(&final_ops);
-        self.update_best_snapshot(&final_ops, self.current_output_stats(false));
-
-        self.ops = prepass_ops.clone();
-        self.best_snapshot = Some(OutputSnapshot {
-            ops: prepass_ops.clone(),
-            score: self.score_ops(&prepass_ops),
-            stats: prepass_stats,
-        });
-
-        self.write_debug_answer();
     }
 
 

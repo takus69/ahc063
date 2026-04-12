@@ -534,33 +534,19 @@ impl Solver {
         if frontier >= self.input.m || frontier == state.colors.len() {
             return None;
         }
+        let want = self.input.d[frontier];
 
-        let mut best: Option<(usize, usize, usize, Vec<char>)> = None;
+        let mut best: Option<(usize, usize, Vec<char>)> = None;
 
         for idx in 2..state.positions.len().saturating_sub(1) {
-            let target = state.positions[idx];
-            let bfs = self.bfs_reachable_body_target_ignore_food(state, target);
-            let Some(bite_moves) = bfs.restore_moves(target) else {
+            let Some((bite_moves, bitten, dropped_suffix)) =
+                self.simulate_bite_candidate_with_dropped_suffix(state, idx)
+            else {
                 continue;
             };
-
-            let mut bitten = SnakeState {
-                board: state.board.clone(),
-                positions: state.positions.clone(),
-                colors: state.colors.clone(),
-            };
-            let mut dropped_suffix = None;
-            for &op in &bite_moves {
-                dropped_suffix = self.apply_move_with_bite_info(&mut bitten, op).or(dropped_suffix);
-            }
-            if bitten.colors.len() >= state.colors.len() {
-                continue;
-            }
-            let dropped_suffix = dropped_suffix.unwrap_or_default();
             if bitten.colors.len() > frontier {
                 continue;
             }
-
             let rebuild_need = frontier.saturating_sub(bitten.colors.len());
             if rebuild_need > dropped_suffix.len() {
                 continue;
@@ -574,24 +560,23 @@ impl Solver {
                 continue;
             }
 
-            let Some(simple_moves) = self.plan_simple_frontier_target(&restored_state) else {
+            let simple_bfs = self.bfs_reachable_target_color_ignoring_body(&restored_state, want);
+            let Some(target) = self.choose_nearest_food_of_color(&restored_state, &simple_bfs, want) else {
                 continue;
             };
 
             let mut all_moves = bite_moves.clone();
             all_moves.extend(restore_moves.iter().copied());
-            all_moves.extend(simple_moves.iter().copied());
-            let candidate = (simple_moves.len(), restore_moves.len(), all_moves.len(), all_moves);
+            let candidate = (target.dist, all_moves.len(), all_moves);
             if best.as_ref().is_none_or(|current| {
                 candidate.0 < current.0
                     || (candidate.0 == current.0 && candidate.1 < current.1)
-                    || (candidate.0 == current.0 && candidate.1 == current.1 && candidate.2 < current.2)
             }) {
                 best = Some(candidate);
             }
         }
 
-        best.map(|(_, _, _, moves)| moves)
+        best.map(|(_, _, moves)| moves)
     }
 
     fn bfs_reachable_target_color_ignoring_body(
@@ -637,7 +622,70 @@ impl Solver {
         result
     }
 
+
+    fn plan_bite_restore_opportunity(&self, state: &SnakeState) -> Option<Vec<char>> {
+        let frontier = self.prefix_len(state);
+        if frontier >= self.input.m {
+            return None;
+        }
+
+        let mut best: Option<(bool, usize, usize, usize, Vec<char>)> = None;
+
+        for idx in 2..state.positions.len().saturating_sub(1) {
+            let Some((bite_moves, bitten, dropped_suffix)) =
+                self.simulate_bite_candidate_with_dropped_suffix(state, idx)
+            else {
+                continue;
+            };
+            if bitten.colors.len() > frontier {
+                continue;
+            }
+            let rebuild_need = frontier.saturating_sub(bitten.colors.len());
+            if rebuild_need > dropped_suffix.len() {
+                continue;
+            }
+            let Some((restored_state, restore_moves)) =
+                self.rebuild_prefix_suffix(bitten, &dropped_suffix, rebuild_need)
+            else {
+                continue;
+            };
+            if restored_state.colors.len() != frontier || self.prefix_len(&restored_state) != frontier {
+                continue;
+            }
+
+            let simple_moves = self.plan_simple_frontier_target(&restored_state);
+
+            let mut all_moves = bite_moves.clone();
+            all_moves.extend(restore_moves.iter().copied());
+            if let Some(moves) = &simple_moves {
+                all_moves.extend(moves.iter().copied());
+            }
+
+            let candidate = (
+                simple_moves.is_some(),
+                restored_state.colors.len(),
+                simple_moves.as_ref().map_or(usize::MAX, |moves| moves.len()),
+                all_moves.len(),
+                all_moves,
+            );
+            if best.as_ref().is_none_or(|current| {
+                candidate.0 && !current.0
+                    || (candidate.0 == current.0 && candidate.1 > current.1)
+                    || (candidate.0 == current.0 && candidate.1 == current.1 && candidate.2 < current.2)
+                    || (candidate.0 == current.0 && candidate.1 == current.1 && candidate.2 == current.2
+                        && candidate.3 < current.3)
+            }) {
+                best = Some(candidate);
+            }
+        }
+
+        best.map(|(_, _, _, _, moves)| moves)
+    }
+
     fn plan_make_restore_opportunity(&self, state: &SnakeState) -> Option<Vec<char>> {
+        if let Some(moves) = self.plan_bite_restore_opportunity(state) {
+            return Some(moves);
+        }
         if let Some((plan, _, _)) = self.plan_greedy_fallback_inner(state) {
             return Some(plan.moves);
         }
@@ -2785,47 +2833,6 @@ impl Solver {
             && (self.remaining_food_count(state) <= SAFE_BRANCH_ENDGAME_REMAINING_FOOD_LIMIT
                 || self.is_progress_stalled()
                 || self.safe_collect_count + 1 >= SAFE_BRANCH_MIN_SAFE_COLLECT_COUNT)
-    }
-
-    fn bfs_reachable_body_target_ignore_food(&self, state: &SnakeState, target: (usize, usize)) -> BfsResult {
-        let start = state.positions[0];
-        let mut result = BfsResult::new(self.input.n, start);
-        let mut blocked = vec![vec![false; self.input.n]; self.input.n];
-        let mut queue = VecDeque::new();
-
-        for &(i, j) in state.positions.iter().skip(1) {
-            blocked[i][j] = true;
-        }
-        blocked[target.0][target.1] = false;
-
-        result.reachable[start.0][start.1] = true;
-        result.dist[start.0][start.1] = Some(0);
-        queue.push_back(start);
-
-        while let Some(current) = queue.pop_front() {
-            let current_dist =
-                result.dist[current.0][current.1].expect("visited cell must have distance");
-
-            for op in ['U', 'D', 'L', 'R'] {
-                let Some(next) = self.try_advance(current, op) else {
-                    continue;
-                };
-                if blocked[next.0][next.1] || result.reachable[next.0][next.1] {
-                    continue;
-                }
-
-                result.reachable[next.0][next.1] = true;
-                result.dist[next.0][next.1] = Some(current_dist + 1);
-                result.parent[next.0][next.1] = Some(current);
-                result.parent_move[next.0][next.1] = Some(op);
-                if next == target {
-                    return result;
-                }
-                queue.push_back(next);
-            }
-        }
-
-        result
     }
 
     fn bfs_reachable_body_target(&self, state: &SnakeState, target: (usize, usize)) -> BfsResult {

@@ -572,10 +572,12 @@ impl Solver {
             }
 
             let order = self.shuffled_bfs_order();
-            let simple_bfs = self.bfs_reachable_target_color_ignoring_body_with_order(
+            let cell_open_turn = self.build_cell_open_turn(&restored_state);
+            let simple_bfs = self.bfs_reachable_target_color_with_order_precomputed(
                 &restored_state,
                 want,
                 &order,
+                &cell_open_turn,
             );
             let Some(target) = self.choose_nearest_food_of_color(&restored_state, &simple_bfs, want) else {
                 continue;
@@ -595,58 +597,15 @@ impl Solver {
         best.map(|(_, _, moves)| moves)
     }
 
-    fn bfs_reachable_target_color_ignoring_body_with_order(
-        &self,
-        state: &SnakeState,
-        target_color: usize,
-        order: &[char; 4],
-    ) -> BfsResult {
-        let start = state.positions[0];
-        let mut result = BfsResult::new(self.input.n, start);
-        let mut queue = VecDeque::new();
-
-        result.reachable[start.0][start.1] = true;
-        result.dist[start.0][start.1] = Some(0);
-        queue.push_back(start);
-
-        while let Some(current) = queue.pop_front() {
-            let current_dist =
-                result.dist[current.0][current.1].expect("visited cell must have distance");
-
-            if current != start && state.board[current.0][current.1] == target_color {
-                continue;
-            }
-
-            for &op in order {
-                let Some(next) = self.try_advance(current, op) else {
-                    continue;
-                };
-                if state.board[next.0][next.1] != 0 && state.board[next.0][next.1] != target_color {
-                    continue;
-                }
-                if result.reachable[next.0][next.1] {
-                    continue;
-                }
-
-                result.reachable[next.0][next.1] = true;
-                result.dist[next.0][next.1] = Some(current_dist + 1);
-                result.parent[next.0][next.1] = Some(current);
-                result.parent_move[next.0][next.1] = Some(op);
-                queue.push_back(next);
-            }
-        }
-
-        result
-    }
-
 
     fn plan_bite_restore_opportunity_random(&mut self, state: &SnakeState) -> Option<Vec<char>> {
         let frontier = self.prefix_len(state);
         if frontier >= self.input.m {
             return None;
         }
+        let want = self.input.d[frontier];
 
-        let mut best: Option<(bool, usize, usize, usize, Vec<char>)> = None;
+        let mut best: Option<(bool, usize, usize, usize, usize, Vec<char>)> = None;
 
         for idx in 2..state.positions.len().saturating_sub(1) {
             let Some((bite_moves, bitten, dropped_suffix)) =
@@ -670,33 +629,48 @@ impl Solver {
                 continue;
             }
 
-            let simple_moves = self.plan_simple_frontier_target_random(&restored_state);
+            let order = self.shuffled_bfs_order();
+            let cell_open_turn = self.build_cell_open_turn(&restored_state);
+            let simple_bfs = self.bfs_reachable_target_color_with_order_precomputed(
+                &restored_state,
+                want,
+                &order,
+                &cell_open_turn,
+            );
+            let simple_moves = self
+                .choose_nearest_food_of_color(&restored_state, &simple_bfs, want)
+                .and_then(|target| simple_bfs.restore_moves(target.cell).map(|moves| (target.dist, moves)));
 
             let mut all_moves = bite_moves.clone();
             all_moves.extend(restore_moves.iter().copied());
-            if let Some(moves) = &simple_moves {
+            let next_target_dist = simple_moves.as_ref().map_or(usize::MAX, |(dist, _)| *dist);
+            let next_target_moves_len = simple_moves.as_ref().map_or(usize::MAX, |(_, moves)| moves.len());
+            if let Some((_, moves)) = &simple_moves {
                 all_moves.extend(moves.iter().copied());
             }
 
             let candidate = (
                 simple_moves.is_some(),
+                next_target_dist,
+                next_target_moves_len,
                 restored_state.colors.len(),
-                simple_moves.as_ref().map_or(usize::MAX, |moves| moves.len()),
                 all_moves.len(),
                 all_moves,
             );
             if best.as_ref().is_none_or(|current| {
                 candidate.0 && !current.0
-                    || (candidate.0 == current.0 && candidate.1 > current.1)
+                    || (candidate.0 == current.0 && candidate.1 < current.1)
                     || (candidate.0 == current.0 && candidate.1 == current.1 && candidate.2 < current.2)
                     || (candidate.0 == current.0 && candidate.1 == current.1 && candidate.2 == current.2
-                        && candidate.3 < current.3)
+                        && candidate.3 > current.3)
+                    || (candidate.0 == current.0 && candidate.1 == current.1 && candidate.2 == current.2
+                        && candidate.3 == current.3 && candidate.4 < current.4)
             }) {
                 best = Some(candidate);
             }
         }
 
-        best.map(|(_, _, _, _, moves)| moves)
+        best.map(|(_, _, _, _, _, moves)| moves)
     }
 
     fn plan_make_restore_opportunity_random(&mut self, state: &SnakeState) -> Option<Vec<char>> {
@@ -3164,13 +3138,6 @@ impl Solver {
 
         for &(i, j) in state.positions.iter().skip(1) {
             blocked[i][j] = true;
-        }
-        for i in 0..self.input.n {
-            for j in 0..self.input.n {
-                if state.board[i][j] != 0 {
-                    blocked[i][j] = true;
-                }
-            }
         }
         blocked[start.0][start.1] = false;
 

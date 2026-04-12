@@ -20,10 +20,10 @@ const RESTART_REBUILD_REGROW_HORIZON: usize = 6;
 const PRE_BITE_NO_BITE_HORIZON: usize = 6;
 const PRE_BITE_NO_BITE_RECHECK_REMAINING_FOOD_LIMIT: usize = 16;
 const GREEDY_PROJECT_HORIZON: usize = 4;
-const SMALL_CASE_GREEDY_TARGET_CANDIDATE_LIMIT: usize = 8;
-const SMALL_CASE_GREEDY_PROJECT_HORIZON: usize = 8;
-const SMALL_CASE_M_LIMIT: usize = 20;
-const SMALL_CASE_C_LIMIT: usize = 3;
+const SMALL_CASE_GREEDY_TARGET_CANDIDATE_LIMIT: usize = 3;
+const SMALL_CASE_GREEDY_PROJECT_HORIZON: usize = 4;
+const SMALL_CASE_M_LIMIT: usize = 30;
+const SMALL_CASE_C_LIMIT: usize = 4;
 const RESTART_BITE_FOR_TARGET_HEAD_CANDIDATE_LIMIT: usize = 6;
 const RESTART_BITE_FOR_TARGET_TARGET_HORIZON: usize = 3;
 const BITE_CONTINUATION_HORIZON: usize = 2;
@@ -2389,7 +2389,7 @@ impl Solver {
     }
 
     fn is_small_case_greedy_mode(&self) -> bool {
-        self.input.m <= SMALL_CASE_M_LIMIT || self.input.c <= SMALL_CASE_C_LIMIT
+        self.input.m <= SMALL_CASE_M_LIMIT && self.input.c <= SMALL_CASE_C_LIMIT
     }
 
     fn greedy_target_candidate_limit(&self) -> usize {

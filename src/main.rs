@@ -1,7 +1,7 @@
 ﻿use proconio::input;
 use std::time::Instant;
 use std::collections::VecDeque;
-use rand::{rngs::StdRng, SeedableRng};
+use rand::{rngs::StdRng, seq::SliceRandom, SeedableRng};
 #[cfg(debug_assertions)]
 use std::io::Write;
 
@@ -24,6 +24,8 @@ const RESTART_BITE_FOR_TARGET_HEAD_CANDIDATE_LIMIT: usize = 6;
 const RESTART_BITE_FOR_TARGET_TARGET_HORIZON: usize = 3;
 const BITE_CONTINUATION_HORIZON: usize = 2;
 const FRONTIER_PREPASS_TIME_LIMIT_MS: u128 = 1900;
+const FRONTIER_PREPASS_RANDOM_MOVE_TRIGGER: usize = 6;
+const FRONTIER_PREPASS_RANDOM_MOVE_MAX_DIST: usize = 4;
 const TARGET_BFS_ORDERS: [[char; 4]; 4] = [
     ['U', 'D', 'L', 'R'],
     ['R', 'D', 'L', 'U'],
@@ -389,6 +391,8 @@ impl Solver {
 
 
     fn run_frontier_prepass(&mut self, state: &mut SnakeState) {
+        let mut fallback_chain = 0usize;
+
         while self.prefix_len(state) < self.input.m && self.ops.len() < 100000 {
             if self.start.elapsed().as_millis() >= FRONTIER_PREPASS_TIME_LIMIT_MS {
                 self.stop_reason = "prepass_time_limit";
@@ -399,11 +403,25 @@ impl Solver {
             let aligned = self.prefix_len(state) == state.colors.len();
 
             let moves = if aligned {
-                self.plan_deep_frontier_target(state)
-                    .or_else(|| self.plan_make_restore_opportunity(state))
+                if let Some(moves) = self.plan_deep_frontier_target_random(state) {
+                    fallback_chain = 0;
+                    Some(moves)
+                } else {
+                    fallback_chain += 1;
+                    self.plan_make_restore_opportunity_random(state)
+                }
+            } else if let Some(moves) = self.plan_bite_restore_target_random(state) {
+                fallback_chain = 0;
+                Some(moves)
             } else {
-                self.plan_bite_restore_target(state)
-                    .or_else(|| self.plan_make_restore_opportunity(state))
+                fallback_chain += 1;
+                self.plan_make_restore_opportunity_random(state)
+            };
+
+            let moves = if fallback_chain >= FRONTIER_PREPASS_RANDOM_MOVE_TRIGGER {
+                self.plan_frontier_random_no_bite_moves(state).or(moves)
+            } else {
+                moves
             };
 
             let Some(moves) = moves else {
@@ -429,6 +447,7 @@ impl Solver {
 
             let prefix_after = self.prefix_len(state);
             if prefix_after > prefix_before {
+                fallback_chain = 0;
                 let mut stats = self.current_output_stats(false);
                 stats.stop_reason = if prefix_after == self.input.m {
                     "completed"
@@ -451,7 +470,6 @@ impl Solver {
                 self.stop_reason = "completed";
                 break;
             }
-
             if self.start.elapsed().as_millis() >= FRONTIER_PREPASS_TIME_LIMIT_MS {
                 self.stop_reason = "prepass_time_limit";
                 break;
@@ -471,18 +489,25 @@ impl Solver {
         }
     }
 
-    fn plan_simple_frontier_target(&self, state: &SnakeState) -> Option<Vec<char>> {
+    fn shuffled_bfs_order(&mut self) -> [char; 4] {
+        let mut order = ['U', 'D', 'L', 'R'];
+        order.shuffle(&mut self.rng);
+        order
+    }
+
+    fn plan_simple_frontier_target_random(&mut self, state: &SnakeState) -> Option<Vec<char>> {
         let frontier = self.prefix_len(state);
         if frontier >= self.input.m {
             return None;
         }
         let want = self.input.d[frontier];
-        let bfs = self.bfs_reachable_target_color(state, want);
+        let order = self.shuffled_bfs_order();
+        let bfs = self.bfs_reachable_target_color_with_order(state, want, &order);
         let target = self.choose_nearest_food_of_color(state, &bfs, want)?;
         bfs.restore_moves(target.cell)
     }
 
-    fn plan_deep_frontier_target(&self, state: &SnakeState) -> Option<Vec<char>> {
+    fn plan_deep_frontier_target_random(&mut self, state: &SnakeState) -> Option<Vec<char>> {
         let mut simulated = SnakeState {
             board: state.board.clone(),
             positions: state.positions.clone(),
@@ -493,7 +518,7 @@ impl Solver {
         while self.prefix_len(&simulated) == simulated.colors.len()
             && self.prefix_len(&simulated) < self.input.m
         {
-            let Some(moves) = self.plan_simple_frontier_target(&simulated) else {
+            let Some(moves) = self.plan_simple_frontier_target_random(&simulated) else {
                 break;
             };
             if moves.is_empty() {
@@ -515,7 +540,7 @@ impl Solver {
         }
     }
 
-    fn plan_bite_restore_target(&self, state: &SnakeState) -> Option<Vec<char>> {
+    fn plan_bite_restore_target_random(&mut self, state: &SnakeState) -> Option<Vec<char>> {
         let frontier = self.prefix_len(state);
         if frontier >= self.input.m || frontier == state.colors.len() {
             return None;
@@ -546,7 +571,12 @@ impl Solver {
                 continue;
             }
 
-            let simple_bfs = self.bfs_reachable_target_color_ignoring_body(&restored_state, want);
+            let order = self.shuffled_bfs_order();
+            let simple_bfs = self.bfs_reachable_target_color_ignoring_body_with_order(
+                &restored_state,
+                want,
+                &order,
+            );
             let Some(target) = self.choose_nearest_food_of_color(&restored_state, &simple_bfs, want) else {
                 continue;
             };
@@ -565,10 +595,11 @@ impl Solver {
         best.map(|(_, _, moves)| moves)
     }
 
-    fn bfs_reachable_target_color_ignoring_body(
+    fn bfs_reachable_target_color_ignoring_body_with_order(
         &self,
         state: &SnakeState,
         target_color: usize,
+        order: &[char; 4],
     ) -> BfsResult {
         let start = state.positions[0];
         let mut result = BfsResult::new(self.input.n, start);
@@ -586,7 +617,7 @@ impl Solver {
                 continue;
             }
 
-            for &op in &TARGET_BFS_ORDERS[0] {
+            for &op in order {
                 let Some(next) = self.try_advance(current, op) else {
                     continue;
                 };
@@ -609,7 +640,7 @@ impl Solver {
     }
 
 
-    fn plan_bite_restore_opportunity(&self, state: &SnakeState) -> Option<Vec<char>> {
+    fn plan_bite_restore_opportunity_random(&mut self, state: &SnakeState) -> Option<Vec<char>> {
         let frontier = self.prefix_len(state);
         if frontier >= self.input.m {
             return None;
@@ -639,7 +670,7 @@ impl Solver {
                 continue;
             }
 
-            let simple_moves = self.plan_simple_frontier_target(&restored_state);
+            let simple_moves = self.plan_simple_frontier_target_random(&restored_state);
 
             let mut all_moves = bite_moves.clone();
             all_moves.extend(restore_moves.iter().copied());
@@ -668,14 +699,42 @@ impl Solver {
         best.map(|(_, _, _, _, moves)| moves)
     }
 
-    fn plan_make_restore_opportunity(&self, state: &SnakeState) -> Option<Vec<char>> {
-        if let Some(moves) = self.plan_bite_restore_opportunity(state) {
+    fn plan_make_restore_opportunity_random(&mut self, state: &SnakeState) -> Option<Vec<char>> {
+        if let Some(moves) = self.plan_bite_restore_opportunity_random(state) {
             return Some(moves);
         }
         if let Some((plan, _, _)) = self.plan_greedy_fallback_inner(state) {
             return Some(plan.moves);
         }
         self.plan_zigzag_safe_collect_moves(state)
+    }
+
+
+    fn plan_frontier_random_no_bite_moves(&mut self, state: &SnakeState) -> Option<Vec<char>> {
+        let order = self.shuffled_bfs_order();
+        let bfs = self.bfs_reachable_empty_cells_with_order(state, &order);
+        let start = state.positions[0];
+        let mut candidates = Vec::new();
+
+        for i in 0..self.input.n {
+            for j in 0..self.input.n {
+                let cell = (i, j);
+                if cell == start {
+                    continue;
+                }
+                let Some(dist) = bfs.distance(cell) else {
+                    continue;
+                };
+                if dist == 0 || dist > FRONTIER_PREPASS_RANDOM_MOVE_MAX_DIST {
+                    continue;
+                }
+                candidates.push(cell);
+            }
+        }
+
+        candidates.shuffle(&mut self.rng);
+        let target = *candidates.first()?;
+        bfs.restore_moves(target)
     }
 
     fn ans(&self) {
@@ -3090,15 +3149,30 @@ impl Solver {
     }
 
     fn bfs_reachable_cells(&self, state: &SnakeState) -> BfsResult {
+        self.bfs_reachable_empty_cells_with_order(state, &TARGET_BFS_ORDERS[0])
+    }
+
+    fn bfs_reachable_empty_cells_with_order(
+        &self,
+        state: &SnakeState,
+        order: &[char; 4],
+    ) -> BfsResult {
         let start = state.positions[0];
         let mut result = BfsResult::new(self.input.n, start);
         let mut blocked = vec![vec![false; self.input.n]; self.input.n];
         let mut queue = VecDeque::new();
 
-        // 噛み切りなしの初期版では、現在の頭以外の蛇マスを障害物とみなす。
         for &(i, j) in state.positions.iter().skip(1) {
             blocked[i][j] = true;
         }
+        for i in 0..self.input.n {
+            for j in 0..self.input.n {
+                if state.board[i][j] != 0 {
+                    blocked[i][j] = true;
+                }
+            }
+        }
+        blocked[start.0][start.1] = false;
 
         result.reachable[start.0][start.1] = true;
         result.dist[start.0][start.1] = Some(0);
@@ -3108,7 +3182,7 @@ impl Solver {
             let current_dist =
                 result.dist[current.0][current.1].expect("visited cell must have distance");
 
-            for op in ['U', 'D', 'L', 'R'] {
+            for &op in order {
                 let Some(next) = self.try_advance(current, op) else {
                     continue;
                 };

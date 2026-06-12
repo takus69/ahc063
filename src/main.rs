@@ -27,9 +27,10 @@ const SMALL_CASE_C_LIMIT: usize = 4;
 const RESTART_BITE_FOR_TARGET_HEAD_CANDIDATE_LIMIT: usize = 6;
 const RESTART_BITE_FOR_TARGET_TARGET_HORIZON: usize = 3;
 const BITE_CONTINUATION_HORIZON: usize = 2;
-const FRONTIER_PREPASS_TIME_LIMIT_MS: u128 = 1900;
+const FRONTIER_PREPASS_TIME_LIMIT_MS: u128 = 1000;
 const FRONTIER_PREPASS_RANDOM_MOVE_TRIGGER: usize = 6;
 const FRONTIER_PREPASS_RANDOM_MOVE_MAX_DIST: usize = 4;
+const FRONTIER_PREPASS_RELAXED_TARGET_MAX_DIST: usize = 8;
 const TARGET_BFS_ORDERS: [[char; 4]; 4] = [
     ['U', 'D', 'L', 'R'],
     ['R', 'D', 'L', 'U'],
@@ -288,14 +289,14 @@ impl Solver {
         let prepass_ops = self.ops.clone();
         let prepass_stats = self.current_output_stats(false);
 
-        self.run_main_loop(&mut state);
+        // self.run_main_loop(&mut state);
         let combined_ops = self.ops.clone();
         let combined_stats = self.current_output_stats(false);
         self.write_debug_main_answer(&combined_ops);
 
         self.reset_run_state();
         let mut state = self.initial_state();
-        self.run_main_loop(&mut state);
+        // self.run_main_loop(&mut state);
         let main_only_ops = self.ops.clone();
         let main_only_stats = self.current_output_stats(false);
 
@@ -490,7 +491,9 @@ impl Solver {
             };
 
             let moves = if fallback_chain >= FRONTIER_PREPASS_RANDOM_MOVE_TRIGGER {
-                self.plan_frontier_random_no_bite_moves(state).or(moves)
+                self.plan_frontier_random_no_bite_moves(state)
+                    .or_else(|| self.plan_frontier_relaxed_next_target_moves(state))
+                    .or(moves)
             } else {
                 moves
             };
@@ -782,6 +785,27 @@ impl Solver {
         candidates.shuffle(&mut self.rng);
         let target = *candidates.first()?;
         bfs.restore_moves(target)
+    }
+
+    fn plan_frontier_relaxed_next_target_moves(&mut self, state: &SnakeState) -> Option<Vec<char>> {
+        let frontier = self.prefix_len(state);
+        if frontier >= self.input.m {
+            return None;
+        }
+        let want = self.input.d[frontier];
+        let order = self.shuffled_bfs_order();
+        let cell_open_turn = self.build_cell_open_turn(state);
+        let bfs = self.bfs_reachable_target_color_relaxed_with_order_precomputed(
+            state,
+            want,
+            &order,
+            &cell_open_turn,
+        );
+        let target = self.choose_nearest_food_of_color(state, &bfs, want)?;
+        if target.dist == 0 || target.dist > FRONTIER_PREPASS_RELAXED_TARGET_MAX_DIST {
+            return None;
+        }
+        bfs.restore_moves(target.cell)
     }
 
 
@@ -3333,6 +3357,21 @@ impl Solver {
         )
     }
 
+    fn bfs_reachable_target_color_relaxed_with_order(
+        &self,
+        state: &SnakeState,
+        target_color: usize,
+        order: &[char; 4],
+    ) -> BfsResult {
+        let cell_open_turn = self.build_cell_open_turn(state);
+        self.bfs_reachable_target_color_relaxed_with_order_precomputed(
+            state,
+            target_color,
+            order,
+            &cell_open_turn,
+        )
+    }
+
 
     fn bfs_reachable_first_food_with_order_precomputed(
         &self,
@@ -3416,6 +3455,50 @@ impl Solver {
                 };
                 let arrival_turn = current_dist + 1;
                 let still_occupied = blocked_open_turn[next.0][next.1] > arrival_turn;
+                if still_occupied || result.reachable[next.0][next.1] {
+                    continue;
+                }
+
+                result.reachable[next.0][next.1] = true;
+                result.dist[next.0][next.1] = Some(arrival_turn);
+                result.parent[next.0][next.1] = Some(current);
+                result.parent_move[next.0][next.1] = Some(op);
+                queue.push_back(next);
+            }
+        }
+
+        result
+    }
+
+    fn bfs_reachable_target_color_relaxed_with_order_precomputed(
+        &self,
+        state: &SnakeState,
+        target_color: usize,
+        order: &[char; 4],
+        cell_open_turn: &[Vec<usize>],
+    ) -> BfsResult {
+        let start = state.positions[0];
+        let mut result = BfsResult::new(self.input.n, start);
+        let mut queue = VecDeque::new();
+
+        result.reachable[start.0][start.1] = true;
+        result.dist[start.0][start.1] = Some(0);
+        queue.push_back(start);
+
+        while let Some(current) = queue.pop_front() {
+            let current_dist =
+                result.dist[current.0][current.1].expect("visited cell must have distance");
+
+            if current != start && state.board[current.0][current.1] == target_color {
+                continue;
+            }
+
+            for &op in order {
+                let Some(next) = self.try_advance(current, op) else {
+                    continue;
+                };
+                let arrival_turn = current_dist + 1;
+                let still_occupied = cell_open_turn[next.0][next.1] > arrival_turn;
                 if still_occupied || result.reachable[next.0][next.1] {
                     continue;
                 }

@@ -27,7 +27,7 @@ def main(i):
     return data
 
 
-def run_simulate(trial=200):
+def run_simulate(trial=2000):
     start_wall = datetime.datetime.now()
     start = time.perf_counter()
     print(f"start time: {start_wall.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}")
